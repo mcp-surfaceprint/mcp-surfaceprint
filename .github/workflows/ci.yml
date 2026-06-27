@@ -28,3 +28,11 @@ jobs:
       - name: Run tests
         run: uv run pytest -q
 
+      - name: Verify committed MCP surface baseline
+        run: |
+          # This intentionally fails when the toy server's declared MCP surface
+          # changes without an accompanying baseline update.
+          uv run mcp-preflight check \
+            tests/baselines/toy-open.snapshot.json \
+            "python tests/toy_servers/toy_open.py"
+
