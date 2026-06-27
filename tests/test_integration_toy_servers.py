@@ -9,87 +9,94 @@ from conftest import TOY_DIR, parse_preflight_json, run_preflight_json
 
 
 def test_toy_open_end_to_end_enumerates_and_classifies_risk() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
-    assert report["server"]["name"] == "toy-open"
-    assert report["status"] == "ok"
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
+    assert snap["observation"]["serverName"] == "toy-open"
+    assert snap["observation"]["status"] == "ok"
 
-    tool_names = [t["name"] for t in report["tools"]]
+    tool_names = [t["name"] for t in snap["surface"]["tools"]]
     assert "get_item" in tool_names
     assert "create_item" in tool_names
     assert "delete_item" in tool_names
 
     # At least: get_item/list_items (read), create_item/frobnicate (write), delete_item (destructive)
-    risk = report["risk"]
+    risk = snap["observation"]["localAnnotations"]["risk"]
     assert risk["read"] >= 1
     assert risk["write"] >= 1
     assert risk["destructive"] >= 1
 
     # Resources + resource templates should both show up.
-    assert "toy://items" in report["resources"]
-    assert any("{item_id}" in uri for uri in report["resourceTemplates"])
+    res_uris = [r["uri"] for r in snap["surface"]["resources"]]
+    tmpl_uris = [t["uriTemplate"] for t in snap["surface"]["resourceTemplates"]]
+    assert "toy://items" in res_uris
+    assert any("{item_id}" in uri for uri in tmpl_uris)
 
     # Prompt should enumerate with args.
-    prompt_names = [p["name"] for p in report["prompts"]]
+    prompt_names = [p["name"] for p in snap["surface"]["prompts"]]
     assert "analyze_items" in prompt_names
 
 
 def test_toy_open_capabilities_reports_all_true() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
-    caps = report["capabilities"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
+    caps = snap["observation"]["capabilities"]
     assert caps["tools"] is True
     assert caps["resources"] is True
     assert caps["prompts"] is True
 
 
 def test_toy_auth_gated_without_token_sets_auth_gated_status() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_auth_gated.py")])
-    assert report["server"]["name"] == "toy-auth-gated"
-    assert report["status"] == "auth_gated"
-    assert report["tools"] == []
-    assert report["resources"] == []
-    assert report["resourceTemplates"] == []
-    assert report["prompts"] == []
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_auth_gated.py")])
+    assert snap["observation"]["serverName"] == "toy-auth-gated"
+    assert snap["observation"]["status"] == "auth_gated"
+    assert snap["surface"]["tools"] == []
+    assert snap["surface"]["resources"] == []
+    assert snap["surface"]["resourceTemplates"] == []
+    assert snap["surface"]["prompts"] == []
+    assert snap.get("surfaceDigest") is None
 
 
 def test_toy_auth_gated_with_token_enumerates() -> None:
-    report = parse_preflight_json(
+    snap = parse_preflight_json(
         ["--env", "TOY_TOKEN=ok", sys.executable, str(TOY_DIR / "toy_auth_gated.py")]
     )
-    assert report["server"]["name"] == "toy-auth-gated"
-    assert report["status"] == "ok"
-    assert any(t["name"] == "get_item" for t in report["tools"])
+    assert snap["observation"]["serverName"] == "toy-auth-gated"
+    assert snap["observation"]["status"] == "ok"
+    assert any(t["name"] == "get_item" for t in snap["surface"]["tools"])
 
 
 def test_toy_home_aware_custom_home_flag() -> None:
     with tempfile.TemporaryDirectory() as td:
         custom_home = Path(td) / "custom-home"
         custom_home.mkdir(parents=True, exist_ok=True)
-        report = parse_preflight_json(
+        snap = parse_preflight_json(
             ["--home", str(custom_home), sys.executable, str(TOY_DIR / "toy_home_aware.py")]
         )
-        tool_names = [t["name"] for t in report["tools"]]
+        tool_names = [t["name"] for t in snap["surface"]["tools"]]
         assert "home_custom_flag" in tool_names
 
 
 def test_toy_home_aware_isolate_home_flag() -> None:
-    report = parse_preflight_json(
+    snap = parse_preflight_json(
         ["--isolate-home", sys.executable, str(TOY_DIR / "toy_home_aware.py")]
     )
-    tool_names = [t["name"] for t in report["tools"]]
+    tool_names = [t["name"] for t in snap["surface"]["tools"]]
     assert "home_isolated_flag" in tool_names
 
 
 def test_toy_partial_resources_timeout_sets_partial_status_and_note() -> None:
-    report = parse_preflight_json(
-        ["--timeout", "0.8", sys.executable, str(TOY_DIR / "toy_partial_resources.py")]
+    snap = parse_preflight_json(
+        # Use a timeout comfortably above typical startup/initialize latency, but below the
+        # toy server's list_resources sleep (2.0s), so list_resources deterministically times out.
+        ["--timeout", "1.2", sys.executable, str(TOY_DIR / "toy_partial_resources.py")]
     )
-    assert report["server"]["name"] == "toy-partial-resources"
-    assert report["status"] == "partial"
-    assert any(t["name"] == "ping" for t in report["tools"])
+    assert snap["observation"]["serverName"] == "toy-partial-resources"
+    assert snap["observation"]["status"] == "partial"
+    assert snap["surfaceCompleteness"] == "partial"
+    assert any(t["name"] == "ping" for t in snap["surface"]["tools"])
     assert any(
         n.get("kind") == "mcp" and n.get("name") == "list_resources" and n.get("rule") == "timeout"
-        for n in (report.get("notes") or [])
+        for n in (snap["observation"].get("notes") or [])
     )
+    assert snap.get("surfaceDigest") is None
 
 
 # ── Tools-only server (capability-aware) ─────────────────────
@@ -97,14 +104,16 @@ def test_toy_partial_resources_timeout_sets_partial_status_and_note() -> None:
 
 def test_toy_tools_only_status_is_ok_not_partial() -> None:
     """A tools-only server should be 'ok', not 'partial' from unsupported capabilities."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
-    assert report["server"]["name"] == "toy-tools-only"
-    assert report["status"] == "ok"
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
+    assert snap["observation"]["serverName"] == "toy-tools-only"
+    assert snap["observation"]["status"] == "ok"
+    assert snap["surfaceCompleteness"] == "complete"
+    assert snap.get("surfaceDigest")
 
 
 def test_toy_tools_only_capabilities_reflect_server() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
-    caps = report["capabilities"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
+    caps = snap["observation"]["capabilities"]
     assert caps["tools"] is True
     assert caps["resources"] is False
     assert caps["prompts"] is False
@@ -112,19 +121,19 @@ def test_toy_tools_only_capabilities_reflect_server() -> None:
 
 def test_toy_tools_only_no_spurious_notes() -> None:
     """No error/timeout notes should be generated for unsupported capabilities."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
-    mcp_notes = [n for n in report.get("notes", []) if n.get("kind") == "mcp"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
+    mcp_notes = [n for n in snap["observation"].get("notes", []) if n.get("kind") == "mcp"]
     assert mcp_notes == []
 
 
 def test_toy_tools_only_enumerates_tools() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
-    tool_names = [t["name"] for t in report["tools"]]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_tools_only.py")])
+    tool_names = [t["name"] for t in snap["surface"]["tools"]]
     assert "greet" in tool_names
     assert "get_time" in tool_names
-    assert report["resources"] == []
-    assert report["resourceTemplates"] == []
-    assert report["prompts"] == []
+    assert snap["surface"]["resources"] == []
+    assert snap["surface"]["resourceTemplates"] == []
+    assert snap["surface"]["prompts"] == []
 
 
 def test_toy_tools_only_text_output_shows_not_supported() -> None:

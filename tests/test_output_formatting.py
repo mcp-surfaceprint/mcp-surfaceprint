@@ -129,12 +129,18 @@ def test_print_prompts_supported_and_empty(capsys) -> None:
 
 
 def test_introspection_coverage_all_ok(capsys) -> None:
-    report = {
-        "capabilities": {"tools": True, "resources": True, "prompts": True},
-        "notes": [],
-        "errors": [],
+    snap = {
+        "observation": {
+            "coverage": {
+                "tools": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resources": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resourceTemplates": {"declaredSupported": True, "attempted": True, "completed": True},
+                "prompts": {"declaredSupported": True, "attempted": True, "completed": True},
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": True},
+            }
+        }
     }
-    _print_introspection_coverage(report)
+    _print_introspection_coverage(snap)
     out = capsys.readouterr().out
     assert "Introspection coverage:" in out
     assert "✓ tools" in out
@@ -143,14 +149,18 @@ def test_introspection_coverage_all_ok(capsys) -> None:
 
 
 def test_introspection_coverage_resources_timeout(capsys) -> None:
-    report = {
-        "capabilities": {"tools": True, "resources": True, "prompts": True},
-        "notes": [
-            {"kind": "mcp", "name": "list_resources", "rule": "timeout", "snippet": "Timed out after 0.8s"},
-        ],
-        "errors": [],
+    snap = {
+        "observation": {
+            "coverage": {
+                "tools": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resources": {"declaredSupported": True, "attempted": True, "completed": False, "errorRule": "timeout"},
+                "resourceTemplates": {"declaredSupported": True, "attempted": True, "completed": True},
+                "prompts": {"declaredSupported": True, "attempted": True, "completed": True},
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": False},
+            }
+        }
     }
-    _print_introspection_coverage(report)
+    _print_introspection_coverage(snap)
     out = capsys.readouterr().out
     assert "✓ tools" in out
     assert "✗ resources (timeout)" in out
@@ -158,14 +168,18 @@ def test_introspection_coverage_resources_timeout(capsys) -> None:
 
 
 def test_introspection_coverage_tools_error(capsys) -> None:
-    report = {
-        "capabilities": {"tools": True, "resources": True, "prompts": True},
-        "notes": [],
-        "errors": [
-            {"kind": "mcp", "name": "list_tools", "rule": "error", "snippet": "Method not found"},
-        ],
+    snap = {
+        "observation": {
+            "coverage": {
+                "tools": {"declaredSupported": True, "attempted": True, "completed": False, "errorRule": "error"},
+                "resources": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resourceTemplates": {"declaredSupported": True, "attempted": True, "completed": True},
+                "prompts": {"declaredSupported": True, "attempted": True, "completed": True},
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": True},
+            }
+        }
     }
-    _print_introspection_coverage(report)
+    _print_introspection_coverage(snap)
     out = capsys.readouterr().out
     assert "✗ tools (error)" in out
     assert "✓ resources" in out
@@ -173,12 +187,18 @@ def test_introspection_coverage_tools_error(capsys) -> None:
 
 def test_introspection_coverage_omits_undeclared_capabilities(capsys) -> None:
     """Resources/prompts not declared by server should not appear in coverage."""
-    report = {
-        "capabilities": {"tools": False, "resources": False, "prompts": False},
-        "notes": [],
-        "errors": [],
+    snap = {
+        "observation": {
+            "coverage": {
+                "tools": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resources": {"declaredSupported": False, "attempted": False, "completed": False},
+                "resourceTemplates": {"declaredSupported": False, "attempted": False, "completed": False},
+                "prompts": {"declaredSupported": False, "attempted": False, "completed": False},
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": True},
+            }
+        }
     }
-    _print_introspection_coverage(report)
+    _print_introspection_coverage(snap)
     out = capsys.readouterr().out
     assert "✓ tools" in out
     assert "resources" not in out
@@ -186,14 +206,18 @@ def test_introspection_coverage_omits_undeclared_capabilities(capsys) -> None:
 
 
 def test_introspection_coverage_prompts_timeout(capsys) -> None:
-    report = {
-        "capabilities": {"tools": True, "resources": False, "prompts": True},
-        "notes": [
-            {"kind": "mcp", "name": "list_prompts", "rule": "timeout", "snippet": "Timed out after 10s"},
-        ],
-        "errors": [],
+    snap = {
+        "observation": {
+            "coverage": {
+                "tools": {"declaredSupported": True, "attempted": True, "completed": True},
+                "resources": {"declaredSupported": False, "attempted": False, "completed": False},
+                "resourceTemplates": {"declaredSupported": False, "attempted": False, "completed": False},
+                "prompts": {"declaredSupported": True, "attempted": True, "completed": False, "errorRule": "timeout"},
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": True},
+            }
+        }
     }
-    _print_introspection_coverage(report)
+    _print_introspection_coverage(snap)
     out = capsys.readouterr().out
     assert "✓ tools" in out
     assert "resources" not in out

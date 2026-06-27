@@ -180,10 +180,10 @@ def test_print_tool_capabilities_shows_operations(capsys) -> None:
     ]
     print_tool_capabilities(tool_caps)
     out = capsys.readouterr().out
-    assert "Action-level Capabilities (server-declared" in out
+    assert "Additional declared operations (from server manifest" in out
     assert "4 operations across 2 tools" in out
-    assert "Not directly visible via MCP introspection" in out
-    assert "additional actions exposed behind the tools above" in out
+    assert "Not represented as separate entries in tools/list" in out
+    assert "server-declared actions multiplexed behind the tools above" in out
     assert "invoice (3): list, get, create" in out
     assert "auth_login (single action)" in out
 
@@ -226,7 +226,7 @@ def test_print_tool_capabilities_at_scale(capsys) -> None:
     out = capsys.readouterr().out
     # 6 + 5 + 5 + 3 dispatched + 3 single-purpose = 22
     assert "22 operations across 7 tools" in out
-    assert "Not directly visible via MCP introspection" in out
+    assert "Not represented as separate entries in tools/list" in out
     assert "task (6)" in out
     assert "↳ search" in out
 
@@ -235,24 +235,24 @@ def test_print_tool_capabilities_at_scale(capsys) -> None:
 
 
 def test_toy_capabilities_json_has_manifest_key() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    assert report["server"]["name"] == "toy-capabilities"
-    assert report["status"] == "ok"
-
-    tc = report.get("manifest")
-    assert tc is not None
-    assert isinstance(tc, list)
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    assert snap["observation"]["serverName"] == "toy-capabilities"
+    assert snap["observation"]["status"] == "ok"
+    sources = snap["surface"]["declarationSources"]
+    assert any(s.get("name") == "mcp_manifest" for s in sources)
 
 
 def test_toy_capabilities_has_29_tools_in_manifest() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    tc = report["manifest"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    src = next(s for s in snap["surface"]["declarationSources"] if s.get("name") == "mcp_manifest")
+    tc = src["extracted"]["toolCapabilities"]
     assert len(tc) == 29
 
 
 def test_toy_capabilities_dispatch_tools_have_operations() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    tc = report["manifest"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    src = next(s for s in snap["surface"]["declarationSources"] if s.get("name") == "mcp_manifest")
+    tc = src["extracted"]["toolCapabilities"]
 
     by_name = {e["tool"]: e for e in tc}
 
@@ -275,8 +275,9 @@ def test_toy_capabilities_dispatch_tools_have_operations() -> None:
 
 def test_toy_capabilities_report_dispatch_tools_expand() -> None:
     """Tools using 'report' as dispatch_key should also expand."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    by_name = {e["tool"]: e for e in report["manifest"]}
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    src = next(s for s in snap["surface"]["declarationSources"] if s.get("name") == "mcp_manifest")
+    by_name = {e["tool"]: e for e in src["extracted"]["toolCapabilities"]}
 
     assert "operations" in by_name["analytics"]
     assert len(by_name["analytics"]["operations"]) == 10
@@ -287,8 +288,9 @@ def test_toy_capabilities_report_dispatch_tools_expand() -> None:
 
 
 def test_toy_capabilities_single_purpose_tools_have_no_operations() -> None:
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    by_name = {e["tool"]: e for e in report["manifest"]}
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    src = next(s for s in snap["surface"]["declarationSources"] if s.get("name") == "mcp_manifest")
+    by_name = {e["tool"]: e for e in src["extracted"]["toolCapabilities"]}
 
     for name in ("auth_login", "auth_complete", "auth_status", "auth_logout", "search"):
         assert "operations" not in by_name[name], f"{name} should not have operations"
@@ -296,8 +298,9 @@ def test_toy_capabilities_single_purpose_tools_have_no_operations() -> None:
 
 def test_toy_capabilities_total_operation_count() -> None:
     """The manifest should reflect 150+ dispatched operations."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    tc = report["manifest"]
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    src = next(s for s in snap["surface"]["declarationSources"] if s.get("name") == "mcp_manifest")
+    tc = src["extracted"]["toolCapabilities"]
 
     total_dispatched = sum(len(e["operations"]) for e in tc if "operations" in e)
     assert total_dispatched >= 150
@@ -313,7 +316,7 @@ def test_toy_capabilities_text_output_shows_scale() -> None:
         text=True,
         check=True,
     )
-    assert "Action-level Capabilities (server-declared" in proc.stdout
+    assert "Additional declared operations (from server manifest" in proc.stdout
     # Should show "156 operations across 29 tools" (151 dispatched + 5 single)
     assert "29 tools" in proc.stdout
     assert "156 operations" in proc.stdout
@@ -325,11 +328,11 @@ def test_toy_capabilities_text_output_shows_scale() -> None:
 
 def test_toy_capabilities_list_tools_returns_29_tools() -> None:
     """The MCP server itself should register all 29 tools."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
-    assert len(report["tools"]) == 29
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_capabilities.py")])
+    assert len(snap["surface"]["tools"]) == 29
 
 
 def test_toy_open_has_no_manifest_key() -> None:
     """Servers without a ://mcp/manifest resource should not have the key."""
-    report = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
-    assert "manifest" not in report
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
+    assert snap["surface"]["declarationSources"] == []

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -74,11 +75,48 @@ def classify_tool(name: str, description: str) -> tuple[str, str]:
 def _normalize_text(s: object) -> str:
     return " ".join(str(s).split())
 
+def _normalize_declared_text(value: str | None) -> str | None:
+    """Normalize declared text without semantic whitespace rewriting."""
+    if value is None:
+        return None
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _json_safe(v: Any) -> Any:
+    """Best-effort conversion of a value into JSON-safe primitives (observation only)."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, dict):
+        return {str(k): _json_safe(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return _normalize_text(v)
+
+def _json_identity(v: Any) -> Any:
+    """Strict JSON conversion for identity-bearing surface fields."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, dict):
+        return {str(k): _json_identity(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_identity(x) for x in v]
+    raise TypeError(f"Non-JSON identity value: {type(v).__name__}")
+
 
 def _tool_dict(tool: Any) -> dict:
     desc = tool.description or "(no description)"
     icon, risk = classify_tool(tool.name, desc)
     return {"name": tool.name, "description": _normalize_text(desc), "risk": risk, "icon": icon}
+
+def _tool_surface_dict(tool: Any) -> dict:
+    """Tool entry for the hashed declared surface."""
+    desc = getattr(tool, "description", None)
+    schema = getattr(tool, "inputSchema", None)
+    return {
+        "name": tool.name,
+        "description": _normalize_declared_text(desc) if isinstance(desc, str) else None,
+        "inputSchema": _json_identity(schema) if schema is not None else None,
+    }
 
 
 def _prompt_dict(prompt: Any) -> dict:
@@ -90,6 +128,57 @@ def _prompt_dict(prompt: Any) -> dict:
         "name": prompt.name,
         "arguments": args,
         "description": _normalize_text(desc) if desc else None,
+    }
+
+def _prompt_surface_dict(prompt: Any) -> dict:
+    """Prompt entry for the hashed declared surface."""
+    desc = getattr(prompt, "description", None)
+    args: list[dict] = []
+    raw_args = getattr(prompt, "arguments", None)
+    if raw_args:
+        for a in raw_args:
+            entry: dict[str, Any] = {"name": getattr(a, "name", None)}
+            a_desc = getattr(a, "description", None)
+            if isinstance(a_desc, str):
+                entry["description"] = _normalize_declared_text(a_desc)
+            if hasattr(a, "required"):
+                req = getattr(a, "required")
+                if isinstance(req, bool):
+                    entry["required"] = req
+            # Some implementations expose a schema-like dict; include only if it's JSON-safe.
+            a_schema = getattr(a, "schema", None)
+            if isinstance(a_schema, dict):
+                entry["schema"] = _json_identity(a_schema)
+            args.append(entry)
+    args.sort(key=lambda x: x.get("name") or "")
+    return {
+        "name": prompt.name,
+        "arguments": args,
+        "description": _normalize_declared_text(desc) if isinstance(desc, str) else None,
+    }
+
+
+def _resource_surface_dict(resource: Any) -> dict:
+    ann = getattr(resource, "annotations", None)
+    return {
+        "uri": str(getattr(resource, "uri", "")),
+        "name": getattr(resource, "name", None),
+        "title": getattr(resource, "title", None),
+        "description": _normalize_declared_text(getattr(resource, "description", None)),
+        "mimeType": getattr(resource, "mimeType", None),
+        "annotations": _json_identity(ann) if ann is not None else None,
+    }
+
+
+def _resource_template_surface_dict(tpl: Any) -> dict:
+    ann = getattr(tpl, "annotations", None)
+    return {
+        "uriTemplate": str(getattr(tpl, "uriTemplate", "")),
+        "name": getattr(tpl, "name", None),
+        "title": getattr(tpl, "title", None),
+        "description": _normalize_declared_text(getattr(tpl, "description", None)),
+        "mimeType": getattr(tpl, "mimeType", None),
+        "annotations": _json_identity(ann) if ann is not None else None,
     }
 
 
@@ -142,6 +231,23 @@ def _expand_tool_capabilities(caps_data: dict) -> list[dict]:
         items.append(entry)
     items.sort(key=lambda e: e["tool"])
     return items
+
+
+def _find_list_duplicates(values: list[Any]) -> list[Any]:
+    """Return a stable list of duplicate values (by JSON identity when possible)."""
+    seen: set[str] = set()
+    dupes: dict[str, Any] = {}
+    for v in values:
+        try:
+            key = json.dumps(v, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except Exception:
+            key = _normalize_text(v)
+        if key in seen and key not in dupes:
+            dupes[key] = v
+        else:
+            seen.add(key)
+    # Stable output order.
+    return [dupes[k] for k in sorted(dupes.keys())]
 
 
 SUSPICIOUS_PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -263,9 +369,9 @@ def print_tool_capabilities(tool_caps: list[dict]) -> None:
 
     ops_word = "operation" if total_ops == 1 else "operations"
     tools_word = "tool" if len(tool_caps) == 1 else "tools"
-    print(f"  Action-level Capabilities (server-declared, {total_ops} {ops_word} across {len(tool_caps)} {tools_word}):")
-    print("    Not directly visible via MCP introspection.")
-    print("    These represent additional actions exposed behind the tools above.")
+    print(f"  Additional declared operations (from server manifest, {total_ops} {ops_word} across {len(tool_caps)} {tools_word}):")
+    print("    Not represented as separate entries in tools/list.")
+    print("    These are server-declared actions multiplexed behind the tools above.")
     for entry in tool_caps:
         name = entry["tool"]
         ops = entry.get("operations")
@@ -290,7 +396,12 @@ def print_prompts(prompts: list[dict], *, supported: bool = True, had_error: boo
     for p in sorted(prompts, key=lambda x: x.get("name", "")):
         args = ""
         if p.get("arguments"):
-            arg_names = p["arguments"]
+            raw_args = p["arguments"]
+            # Supports both legacy ["a","b"] args and surface [{"name":"a"},...] args.
+            if raw_args and isinstance(raw_args[0], dict):
+                arg_names = [a.get("name") for a in raw_args if isinstance(a, dict) and a.get("name")]
+            else:
+                arg_names = raw_args
             args = f" ({', '.join(arg_names)})"
         print(f"    💬 {p['name']}{args}")
     print()
@@ -350,54 +461,59 @@ def print_risk_summary(counts: dict) -> None:
     print()
 
 
-def _print_introspection_coverage(report: dict) -> None:
-    """Print a ✓/✗ checklist showing which MCP introspection calls succeeded.
+def _print_introspection_coverage(snapshot: dict) -> None:
+    """Print a ✓/✗ checklist showing which introspection calls succeeded."""
+    obs = snapshot.get("observation") or {}
+    cov = obs.get("coverage") or {}
 
-    Only meaningful for partial reports — shows what was attempted and whether
-    it succeeded so the reader can tell at a glance what's missing.
-    """
-    capabilities = report.get("capabilities", {})
-    notes = report.get("notes", [])
-    errors = report.get("errors", [])
-
-    # Build a map of failed MCP calls: name → rule (timeout/error).
-    failed: dict[str, str] = {}
-    for n in notes + errors:
-        if n.get("kind") == "mcp" and n.get("rule") in ("timeout", "error"):
-            failed[n["name"]] = n["rule"]
+    def fmt_section(name: str, key: str) -> str | None:
+        s = cov.get(key) or {}
+        if not isinstance(s, dict):
+            return None
+        attempted = bool(s.get("attempted"))
+        completed = bool(s.get("completed"))
+        declared = s.get("declaredSupported")
+        if declared is False and not attempted:
+            return None
+        if not attempted:
+            return f"    - {name} (not attempted)"
+        if completed:
+            return f"    ✓ {name}"
+        rule = s.get("errorRule") or "error"
+        return f"    ✗ {name} ({rule})"
 
     print("  Introspection coverage:")
-
-    # Tools — always attempted (many servers omit the capability flag).
-    if "list_tools" in failed:
-        print(f"    ✗ tools ({failed['list_tools']})")
-    else:
-        print("    ✓ tools")
-
-    # Resources — only attempted when the server declares the capability.
-    if capabilities.get("resources"):
-        res_fail = failed.get("list_resources") or failed.get("list_resource_templates")
-        if res_fail:
-            print(f"    ✗ resources ({res_fail})")
-        else:
-            print("    ✓ resources")
-
-    # Prompts — only attempted when the server declares the capability.
-    if capabilities.get("prompts"):
-        if "list_prompts" in failed:
-            print(f"    ✗ prompts ({failed['list_prompts']})")
-        else:
-            print("    ✓ prompts")
-
+    for label, key in (
+        ("tools", "tools"),
+        ("resources", "resources"),
+        ("resource templates", "resourceTemplates"),
+        ("prompts", "prompts"),
+        ("manifest", "manifest"),
+    ):
+        line = fmt_section(label, key)
+        if line:
+            print(line)
     print()
 
 
-def print_text_report(report: dict) -> None:
-    """Render a finalized report dict as human-readable text to stdout."""
-    server = report.get("server", {})
-    status = report.get("status", "ok")
+def _manifest_tool_caps_from_surface(surface: dict) -> list[dict]:
+    for src in surface.get("declarationSources") or []:
+        if isinstance(src, dict) and src.get("name") == "mcp_manifest":
+            extracted = src.get("extracted") or {}
+            if isinstance(extracted, dict) and isinstance(extracted.get("toolCapabilities"), list):
+                return extracted["toolCapabilities"]
+    return []
 
-    print_header(server.get("name", "unknown"), server.get("protocolVersion", "unknown"))
+
+def print_text_report(snapshot: dict) -> None:
+    """Render a finalized snapshot dict as human-readable text to stdout."""
+    obs = snapshot.get("observation") or {}
+    surface = snapshot.get("surface") or {}
+    server_name = obs.get("serverName") or "unknown"
+    protocol_version = obs.get("protocolVersion") or "unknown"
+    status = obs.get("status", "ok")
+
+    print_header(server_name, protocol_version)
     print("  Caution: the server process runs locally without sandboxing.")
     print("  Use --isolate-home to prevent access to your real HOME directory.\n")
 
@@ -407,32 +523,32 @@ def print_text_report(report: dict) -> None:
 
     if status == "partial":
         print("  Status: ⚠️  partial\n")
-        _print_introspection_coverage(report)
+        _print_introspection_coverage(snapshot)
 
-    print_tools(report.get("tools", []))
+    local = obs.get("localAnnotations") or {}
+    print_tools(local.get("tools", []))
 
-    capabilities = report.get("capabilities", {})
-    notes = report.get("notes", [])
-    resources_had_error = any(
-        n.get("name") in ("list_resources", "list_resource_templates") for n in notes
-    )
+    capabilities = obs.get("capabilities", {})
+    notes = obs.get("notes", [])
+    errors = obs.get("errors", [])
+    resources_had_error = any(n.get("name") in ("list_resources", "list_resource_templates") for n in notes)
     prompts_had_error = any(n.get("name") == "list_prompts" for n in notes)
 
     print_resources(
-        report.get("resources", []),
-        report.get("resourceTemplates", []),
+        [r.get("uri") for r in (surface.get("resources") or []) if isinstance(r, dict) and r.get("uri")],
+        [t.get("uriTemplate") for t in (surface.get("resourceTemplates") or []) if isinstance(t, dict) and t.get("uriTemplate")],
         supported=capabilities.get("resources", True),
         had_error=resources_had_error,
     )
-    print_tool_capabilities(report.get("manifest", []))
+    print_tool_capabilities(_manifest_tool_caps_from_surface(surface))
     print_prompts(
-        report.get("prompts", []),
+        surface.get("prompts", []),
         supported=capabilities.get("prompts", True),
         had_error=prompts_had_error,
     )
-    print_signals(report.get("signals", []))
+    print_signals(local.get("signals", []))
     print_notes(notes)
-    print_risk_summary(report.get("risk", {}))
+    print_risk_summary(local.get("risk", {}))
 
 
 # ── Main ─────────────────────────────────────────────────────
@@ -592,6 +708,310 @@ def _build_report(
     return report
 
 
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    # Deterministic JSON for hashing: no whitespace, UTF-8, stable key ordering (after canonicalization).
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _canonicalize_schema(schema: Any) -> Any:
+    """Normalize JSON Schema-ish objects for stable identity."""
+    if isinstance(schema, dict):
+        out: dict[str, Any] = {}
+        for k in sorted(schema.keys()):
+            v = schema[k]
+            if k in ("required", "enum") and isinstance(v, list):
+                # Treat as sets; sort deterministically.
+                try:
+                    out[k] = sorted(v)
+                except TypeError:
+                    out[k] = sorted((_normalize_text(x) for x in v))
+                continue
+            # Do not reorder oneOf/anyOf/allOf by default; ordering can matter for some tooling.
+            out[k] = _canonicalize_schema(v)
+        return out
+    if isinstance(schema, list):
+        return [_canonicalize_schema(x) for x in schema]
+    return schema
+
+
+def _canonicalize_surface(surface: dict) -> dict:
+    """Return a deterministically ordered/normalized surface object for hashing."""
+    tools = surface.get("tools") or []
+    resources = surface.get("resources") or []
+    templates = surface.get("resourceTemplates") or []
+    prompts = surface.get("prompts") or []
+    decl_sources = surface.get("declarationSources") or []
+
+    norm_tools: list[dict] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        entry = {
+            "name": t.get("name"),
+            "description": t.get("description"),
+            "inputSchema": _canonicalize_schema(t.get("inputSchema")),
+        }
+        norm_tools.append(entry)
+    norm_tools.sort(key=lambda x: x.get("name") or "")
+
+    norm_resources: list[dict] = []
+    for r in resources:
+        if not isinstance(r, dict):
+            norm_resources.append({"uri": r})
+            continue
+        norm_resources.append(
+            {
+                "uri": r.get("uri"),
+                "name": r.get("name"),
+                "title": r.get("title"),
+                "description": r.get("description"),
+                "mimeType": r.get("mimeType"),
+                "annotations": _canonicalize_schema(r.get("annotations")),
+            }
+        )
+    norm_resources.sort(key=lambda x: x.get("uri") or "")
+
+    norm_templates: list[dict] = []
+    for t in templates:
+        if not isinstance(t, dict):
+            norm_templates.append({"uriTemplate": t})
+            continue
+        norm_templates.append(
+            {
+                "uriTemplate": t.get("uriTemplate"),
+                "name": t.get("name"),
+                "title": t.get("title"),
+                "description": t.get("description"),
+                "mimeType": t.get("mimeType"),
+                "annotations": _canonicalize_schema(t.get("annotations")),
+            }
+        )
+    norm_templates.sort(key=lambda x: x.get("uriTemplate") or "")
+
+    norm_prompts: list[dict] = []
+    for p in prompts:
+        if not isinstance(p, dict):
+            continue
+        args = p.get("arguments") or []
+        norm_args: list[dict] = []
+        for a in args:
+            if not isinstance(a, dict):
+                continue
+            arg_entry: dict[str, Any] = {"name": a.get("name")}
+            if a.get("description") is not None:
+                arg_entry["description"] = a.get("description")
+            if a.get("required") is not None:
+                arg_entry["required"] = a.get("required")
+            if a.get("schema") is not None:
+                arg_entry["schema"] = _canonicalize_schema(a.get("schema"))
+            norm_args.append(arg_entry)
+        norm_args.sort(key=lambda x: x.get("name") or "")
+        norm_prompts.append(
+            {
+                "name": p.get("name"),
+                "description": p.get("description"),
+                "arguments": norm_args,
+            }
+        )
+    norm_prompts.sort(key=lambda x: x.get("name") or "")
+
+    def _canonicalize_manifest_tool_capabilities(tool_caps: Any) -> Any:
+        """
+        Canonicalize the extracted mcp_manifest toolCapabilities list for identity.
+
+        Contract:
+        - toolCapabilities entries are sorted by `tool`
+        - `operations` is treated as an unordered set for identity, represented as a sorted list
+          (duplicates are preserved; duplicate values should be flagged separately as malformed)
+        """
+        if not isinstance(tool_caps, list):
+            return _canonicalize_schema(tool_caps)
+
+        norm: list[dict] = []
+        for e in tool_caps:
+            if not isinstance(e, dict) or not e.get("tool"):
+                # Preserve nonconforming entries deterministically; they still participate in identity.
+                norm.append(_canonicalize_schema(e) if isinstance(e, (dict, list)) else {"value": e})
+                continue
+
+            entry: dict[str, Any] = {"tool": str(e.get("tool"))}
+            if "description" in e:
+                entry["description"] = e.get("description")
+
+            if "operations" in e and isinstance(e.get("operations"), list):
+                ops = e.get("operations") or []
+                # Sort for identity without silently deduping.
+                try:
+                    entry["operations"] = sorted(ops)
+                except TypeError:
+                    entry["operations"] = sorted(ops, key=_normalize_text)
+
+            # Preserve any additional fields deterministically.
+            for k in sorted(set(e.keys()) - {"tool", "description", "operations"}):
+                entry[k] = _canonicalize_schema(e.get(k))
+
+            norm.append(entry)
+
+        norm.sort(key=lambda x: x.get("tool") or "")
+        return norm
+
+    def _canonicalize_decl_source_extracted(extracted: Any) -> Any:
+        if not isinstance(extracted, dict):
+            return _canonicalize_schema(extracted)
+
+        out: dict[str, Any] = {}
+        for k in sorted(extracted.keys()):
+            if k == "toolCapabilities":
+                out[k] = _canonicalize_manifest_tool_capabilities(extracted.get(k))
+            else:
+                out[k] = _canonicalize_schema(extracted.get(k))
+        return out
+
+    norm_decl_sources: list[dict] = []
+    for s in decl_sources:
+        if not isinstance(s, dict):
+            continue
+        # Keep only identity-bearing facts here; errors/notes should live in observation.
+        entry: dict[str, Any] = {}
+        for k in ("sourceType", "name", "uri", "extracted"):
+            if k in s:
+                entry[k] = _canonicalize_decl_source_extracted(s[k]) if k in ("extracted",) else s[k]
+        norm_decl_sources.append(entry)
+    norm_decl_sources.sort(key=lambda x: (x.get("sourceType") or "", x.get("uri") or "", x.get("name") or ""))
+
+    return {
+        "tools": norm_tools,
+        "resources": norm_resources,
+        "resourceTemplates": norm_templates,
+        "prompts": norm_prompts,
+        "declarationSources": norm_decl_sources,
+    }
+
+
+def _compute_surface_digest(surface: dict) -> str:
+    canonical = _canonicalize_surface(surface)
+    return "sha256:" + _sha256_hex(_canonical_json_bytes(canonical))
+
+
+def _surface_entity_digests(surface: dict) -> dict:
+    """Derived per-entity digests (not included in surface hashing)."""
+    canonical = _canonicalize_surface(surface)
+    tool_d: dict[str, str] = {}
+    for t in canonical.get("tools", []):
+        name = t.get("name")
+        if name:
+            tool_d[str(name)] = "sha256:" + _sha256_hex(_canonical_json_bytes(t))
+    prompt_d: dict[str, str] = {}
+    for p in canonical.get("prompts", []):
+        name = p.get("name")
+        if name:
+            prompt_d[str(name)] = "sha256:" + _sha256_hex(_canonical_json_bytes(p))
+    resource_d: dict[str, str] = {}
+    for r in canonical.get("resources", []):
+        uri = r.get("uri")
+        if uri:
+            resource_d[str(uri)] = "sha256:" + _sha256_hex(_canonical_json_bytes(r))
+    template_d: dict[str, str] = {}
+    for t in canonical.get("resourceTemplates", []):
+        uri = t.get("uriTemplate")
+        if uri:
+            template_d[str(uri)] = "sha256:" + _sha256_hex(_canonical_json_bytes(t))
+    return {
+        "tools": tool_d,
+        "prompts": prompt_d,
+        "resources": resource_d,
+        "resourceTemplates": template_d,
+    }
+
+
+def _surface_completeness_from_coverage(coverage: dict) -> str:
+    """Return 'complete' if all identity-bearing sections succeeded or were unsupported."""
+    for key in ("tools", "resources", "resourceTemplates", "prompts", "manifest"):
+        s = coverage.get(key) or {}
+        if not isinstance(s, dict):
+            return "partial"
+        declared = s.get("declaredSupported")
+        attempted = bool(s.get("attempted"))
+        completed = bool(s.get("completed"))
+        # Completed sections are complete regardless of whether they were attempted
+        # (e.g. manifest absent but resources introspection succeeded).
+        if completed:
+            continue
+        # Explicitly unsupported sections count as complete if we did not attempt them.
+        if declared is False and not attempted:
+            continue
+        # For v0.2, 'complete' means we attempted each standard list method (or explicitly
+        # marked the section unsupported) and it completed successfully.
+        if not attempted and declared is not False:
+            return "partial"
+        # Anything else means we don't have a complete declared surface.
+        return "partial"
+    return "complete"
+
+
+def _build_snapshot(
+    *,
+    generated_at: str,
+    scanned_command: list[str],
+    server_name: str,
+    protocol_version: str,
+    capabilities: dict[str, bool],
+    status: str,
+    coverage: dict,
+    surface: dict,
+    tools_for_text: list[dict],
+    risk: dict,
+    signals: list[dict],
+    notes: list[dict],
+    errors: list[dict],
+) -> dict:
+    surface_completeness = _surface_completeness_from_coverage(coverage)
+    snapshot: dict[str, Any] = {
+        "snapshotFormatVersion": "1",
+        "surfaceCompleteness": surface_completeness,
+        "observation": {
+            "generatedAt": generated_at,
+            "protocolVersion": protocol_version,
+            "serverName": server_name,
+            "command": scanned_command,
+            "status": status,
+            "capabilities": capabilities,
+            "coverage": coverage,
+            "notes": notes,
+            "errors": errors,
+            "localAnnotations": {
+                "tools": tools_for_text,
+                "risk": risk,
+                "signals": signals,
+            },
+        },
+        "surface": surface,
+    }
+    if surface_completeness == "complete":
+        try:
+            snapshot["surfaceDigest"] = _compute_surface_digest(surface)
+            snapshot["surfaceEntityDigests"] = _surface_entity_digests(surface)
+        except Exception as e:
+            # Identity must be stable and standards-compliant; fall back to partial if hashing fails.
+            snapshot["surfaceCompleteness"] = "partial"
+            obs = snapshot.get("observation") or {}
+            obs["notes"] = (obs.get("notes") or []) + [
+                {"kind": "snapshot", "name": "surfaceDigest", "rule": "hash_error", "snippet": _normalize_text(str(e))}
+            ]
+            snapshot["observation"] = obs
+    return snapshot
+
+
 async def inspect(
     command: str,
     args: list[str],
@@ -622,13 +1042,41 @@ async def inspect(
             status = "ok"
             errors: list[dict] = []
             notes: list[dict] = []
+            coverage: dict[str, Any] = {
+                "tools": {
+                    "declaredSupported": (True if has_tools else False) if caps is not None else None,
+                    "attempted": True,
+                    "completed": False,
+                },
+                "resources": {
+                    "declaredSupported": (True if has_resources else False) if caps is not None else None,
+                    "attempted": False,
+                    "completed": False,
+                },
+                "resourceTemplates": {
+                    "declaredSupported": (True if has_resources else False) if caps is not None else None,
+                    "attempted": False,
+                    "completed": False,
+                },
+                "prompts": {
+                    "declaredSupported": (True if has_prompts else False) if caps is not None else None,
+                    "attempted": False,
+                    "completed": False,
+                },
+                "manifest": {"declaredSupported": None, "attempted": False, "completed": False},
+            }
 
             # Tools — always attempt even if not declared (many servers omit the capability).
             tools: list[dict] = []
+            tools_surface: list[dict] = []
             try:
                 tools_raw = (await asyncio.wait_for(session.list_tools(), timeout=timeout_s)).tools
                 tools = [_tool_dict(t) for t in tools_raw]
                 tools.sort(key=lambda t: (RISK_PRIORITY.get(t["risk"], 9), t["name"]))
+                tools_surface = [_tool_surface_dict(t) for t in tools_raw]
+                tools_surface.sort(key=lambda t: t.get("name") or "")
+                coverage["tools"]["completed"] = True
+                coverage["tools"]["itemCount"] = len(tools_raw or [])
             except asyncio.TimeoutError:
                 status = _mark_partial(status)
                 errors.append(
@@ -639,6 +1087,7 @@ async def inspect(
                         "snippet": f"Timed out after {timeout_s}s",
                     }
                 )
+                coverage["tools"]["errorRule"] = "timeout"
             except Exception as e:
                 status = _mark_partial(status)
                 errors.append(
@@ -649,54 +1098,116 @@ async def inspect(
                         "snippet": _normalize_text(str(e)),
                     }
                 )
+                coverage["tools"]["errorRule"] = "error"
             risk = count_risks(tools)
 
-            # Resources — skip if server didn't declare the capability.
-            resources = []
-            templates = []
-            if has_resources:
-                try:
-                    resources = (await asyncio.wait_for(session.list_resources(), timeout=timeout_s)).resources
-                except asyncio.TimeoutError:
-                    status = _mark_partial(status)
-                    notes.append(
-                        {"kind": "mcp", "name": "list_resources", "rule": "timeout", "snippet": f"Timed out after {timeout_s}s"}
-                    )
-                except Exception as e:
-                    status = _mark_partial(status)
-                    notes.append(
-                        {"kind": "mcp", "name": "list_resources", "rule": "error", "snippet": _normalize_text(str(e))}
-                    )
-                try:
-                    templates = (
-                        await asyncio.wait_for(session.list_resource_templates(), timeout=timeout_s)
-                    ).resourceTemplates
-                except asyncio.TimeoutError:
+            def _mark_duplicates(items: list[dict], key: str, coverage_key: str) -> None:
+                seen: set[str] = set()
+                dupes: set[str] = set()
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    v = it.get(key)
+                    if v is None:
+                        continue
+                    s = str(v)
+                    if s in seen:
+                        dupes.add(s)
+                    else:
+                        seen.add(s)
+                if dupes:
+                    nonlocal status
                     status = _mark_partial(status)
                     notes.append(
                         {
-                            "kind": "mcp",
-                            "name": "list_resource_templates",
-                            "rule": "timeout",
-                            "snippet": f"Timed out after {timeout_s}s",
+                            "kind": "snapshot",
+                            "name": coverage_key,
+                            "rule": "duplicate_identity",
+                            "snippet": ", ".join(sorted(dupes))[:500],
                         }
                     )
-                except Exception as e:
+                    coverage[coverage_key]["completed"] = False
+                    coverage[coverage_key]["errorRule"] = "duplicate_identity"
+
+            # Resources — attempt discovery even if not declared (servers may omit capability flags).
+            resources = []
+            templates = []
+            def _looks_unsupported(err: str) -> bool:
+                s = err.lower()
+                return "method not found" in s or "not supported" in s or "unknown method" in s
+
+            coverage["resources"]["attempted"] = True
+            try:
+                resources = (await asyncio.wait_for(session.list_resources(), timeout=timeout_s)).resources
+                coverage["resources"]["completed"] = True
+                coverage["resources"]["declaredSupported"] = True
+                coverage["resources"]["itemCount"] = len(resources or [])
+            except asyncio.TimeoutError:
+                status = _mark_partial(status)
+                notes.append(
+                    {"kind": "mcp", "name": "list_resources", "rule": "timeout", "snippet": f"Timed out after {timeout_s}s"}
+                )
+                coverage["resources"]["errorRule"] = "timeout"
+            except Exception as e:
+                msg = _normalize_text(str(e))
+                if _looks_unsupported(msg):
+                    coverage["resources"]["completed"] = True
+                    coverage["resources"]["declaredSupported"] = False
+                else:
                     status = _mark_partial(status)
-                    notes.append(
-                        {"kind": "mcp", "name": "list_resource_templates", "rule": "error", "snippet": _normalize_text(str(e))}
-                    )
+                    notes.append({"kind": "mcp", "name": "list_resources", "rule": "error", "snippet": msg})
+                    coverage["resources"]["errorRule"] = "error"
+
+            coverage["resourceTemplates"]["attempted"] = True
+            try:
+                templates = (await asyncio.wait_for(session.list_resource_templates(), timeout=timeout_s)).resourceTemplates
+                coverage["resourceTemplates"]["completed"] = True
+                coverage["resourceTemplates"]["declaredSupported"] = True
+                coverage["resourceTemplates"]["itemCount"] = len(templates or [])
+            except asyncio.TimeoutError:
+                status = _mark_partial(status)
+                notes.append(
+                    {
+                        "kind": "mcp",
+                        "name": "list_resource_templates",
+                        "rule": "timeout",
+                        "snippet": f"Timed out after {timeout_s}s",
+                    }
+                )
+                coverage["resourceTemplates"]["errorRule"] = "timeout"
+            except Exception as e:
+                msg = _normalize_text(str(e))
+                if _looks_unsupported(msg):
+                    coverage["resourceTemplates"]["completed"] = True
+                    coverage["resourceTemplates"]["declaredSupported"] = False
+                else:
+                    status = _mark_partial(status)
+                    notes.append({"kind": "mcp", "name": "list_resource_templates", "rule": "error", "snippet": msg})
+                    coverage["resourceTemplates"]["errorRule"] = "error"
             resource_uris = sorted([str(r.uri) for r in resources])
             template_uris = sorted([str(t.uriTemplate) for t in templates])
+            resources_surface: list[dict] = []
+            templates_surface: list[dict] = []
+            try:
+                resources_surface = [_resource_surface_dict(r) for r in resources]
+                templates_surface = [_resource_template_surface_dict(t) for t in templates]
+            except TypeError as e:
+                status = _mark_partial(status)
+                notes.append({"kind": "snapshot", "name": "surface", "rule": "non_json_identity", "snippet": _normalize_text(str(e))})
+                coverage["resources"]["completed"] = False
+                coverage["resources"]["errorRule"] = "non_json_identity"
+                coverage["resourceTemplates"]["completed"] = False
+                coverage["resourceTemplates"]["errorRule"] = "non_json_identity"
 
-            # Manifest resource — read-only, no call_tool, no state mutation.
-            tool_capabilities: list[dict] | None = None
+            # Manifest resource — Preflight does not call tools, but any MCP request may execute arbitrary server code.
+            declaration_sources: list[dict] = []
             if resources:
                 caps_resource = next(
                     (r for r in resources if str(r.uri).endswith("://mcp/manifest")),
                     None,
                 )
                 if caps_resource:
+                    coverage["manifest"]["attempted"] = True
                     try:
                         read_result = await asyncio.wait_for(
                             session.read_resource(caps_resource.uri), timeout=timeout_s
@@ -704,29 +1215,110 @@ async def inspect(
                         if read_result.contents:
                             raw_text = getattr(read_result.contents[0], "text", None)
                             if raw_text:
+                                raw_hash = "sha256:" + _sha256_hex(raw_text.encode("utf-8"))
                                 caps_data = _parse_capabilities_resource(raw_text)
                                 if caps_data is not None:
                                     tool_capabilities = _expand_tool_capabilities(caps_data)
-                    except Exception:
-                        pass  # Skip silently on any error.
+                                    # Duplicate operation values are malformed; do not silently repair.
+                                    dupes: list[str] = []
+                                    for e in tool_capabilities:
+                                        ops = e.get("operations")
+                                        if isinstance(ops, list) and ops:
+                                            d = _find_list_duplicates(ops)
+                                            if d:
+                                                tool = str(e.get("tool") or "unknown")
+                                                try:
+                                                    dupes.append(f"{tool}: {', '.join(str(x) for x in d)}")
+                                                except Exception:
+                                                    dupes.append(tool)
+                                    if dupes:
+                                        status = _mark_partial(status)
+                                        notes.append(
+                                            {
+                                                "kind": "declaration_source",
+                                                "name": "mcp_manifest",
+                                                "rule": "duplicate_operations",
+                                                "snippet": "; ".join(dupes)[:700],
+                                            }
+                                        )
+                                        coverage["manifest"]["completed"] = False
+                                        coverage["manifest"]["errorRule"] = "duplicate_operations"
 
-            # Prompts — skip if server didn't declare the capability.
+                                    declaration_sources.append(
+                                        {
+                                            "sourceType": "resource",
+                                            "name": "mcp_manifest",
+                                            "uri": str(caps_resource.uri),
+                                            "extracted": {"toolCapabilities": tool_capabilities},
+                                        }
+                                    )
+                                    # Provenance (non-identity) belongs in observation notes.
+                                    notes.append(
+                                        {
+                                            "kind": "declaration_source",
+                                            "name": "mcp_manifest",
+                                            "rule": "parsed",
+                                            "snippet": raw_hash,
+                                        }
+                                    )
+                                    coverage["manifest"]["completed"] = True
+                                else:
+                                    status = _mark_partial(status)
+                                    notes.append(
+                                        {
+                                            "kind": "declaration_source",
+                                            "name": "mcp_manifest",
+                                            "rule": "invalid",
+                                            "snippet": raw_hash,
+                                        }
+                                    )
+                                    coverage["manifest"]["errorRule"] = "invalid"
+                    except Exception:
+                        status = _mark_partial(status)
+                        notes.append(
+                            {"kind": "declaration_source", "name": "mcp_manifest", "rule": "error", "snippet": "read_resource failed"}
+                        )
+                        coverage["manifest"]["errorRule"] = "error"
+                else:
+                    # Not present; counts as complete (no attempt).
+                    coverage["manifest"]["attempted"] = False
+                    coverage["manifest"]["completed"] = True
+            else:
+                # If resources were supported but list_resources failed, manifest completeness is unknown → partial.
+                if has_resources and coverage["resources"].get("completed") is not True:
+                    coverage["manifest"]["attempted"] = False
+                    coverage["manifest"]["completed"] = False
+                else:
+                    coverage["manifest"]["attempted"] = False
+                    coverage["manifest"]["completed"] = True
+
+            # Prompts — attempt discovery even if not declared (servers may omit capability flags).
             prompts = []
-            if has_prompts:
-                try:
-                    prompts = (await asyncio.wait_for(session.list_prompts(), timeout=timeout_s)).prompts
-                except asyncio.TimeoutError:
+            coverage["prompts"]["attempted"] = True
+            try:
+                prompts = (await asyncio.wait_for(session.list_prompts(), timeout=timeout_s)).prompts
+                coverage["prompts"]["completed"] = True
+                coverage["prompts"]["declaredSupported"] = True
+                coverage["prompts"]["itemCount"] = len(prompts or [])
+            except asyncio.TimeoutError:
+                status = _mark_partial(status)
+                notes.append(
+                    {"kind": "mcp", "name": "list_prompts", "rule": "timeout", "snippet": f"Timed out after {timeout_s}s"}
+                )
+                coverage["prompts"]["errorRule"] = "timeout"
+            except Exception as e:
+                msg = _normalize_text(str(e))
+                if _looks_unsupported(msg):
+                    coverage["prompts"]["completed"] = True
+                    coverage["prompts"]["declaredSupported"] = False
+                else:
                     status = _mark_partial(status)
-                    notes.append(
-                        {"kind": "mcp", "name": "list_prompts", "rule": "timeout", "snippet": f"Timed out after {timeout_s}s"}
-                    )
-                except Exception as e:
-                    status = _mark_partial(status)
-                    notes.append(
-                        {"kind": "mcp", "name": "list_prompts", "rule": "error", "snippet": _normalize_text(str(e))}
-                    )
+                    notes.append({"kind": "mcp", "name": "list_prompts", "rule": "error", "snippet": msg})
+                    coverage["prompts"]["errorRule"] = "error"
             prompts_info = [_prompt_dict(p) for p in prompts]
             prompts_info.sort(key=lambda p: p.get("name", ""))
+            prompts_surface = [_prompt_surface_dict(p) for p in prompts]
+            prompts_surface.sort(key=lambda p: p.get("name") or "")
 
             signals: list[dict] = []
             if include_signals:
@@ -734,126 +1326,647 @@ async def inspect(
 
             notes.sort(key=lambda n: (n.get("kind", ""), n.get("name", ""), n.get("rule", "")))
 
-            return _build_report(
+            # Duplicate detection (identity must be unambiguous).
+            _mark_duplicates(tools_surface, "name", "tools")
+            _mark_duplicates(resources_surface, "uri", "resources")
+            _mark_duplicates(templates_surface, "uriTemplate", "resourceTemplates")
+            _mark_duplicates(prompts_surface, "name", "prompts")
+
+            generated_at = datetime.now(timezone.utc).isoformat()
+            surface = {
+                "tools": tools_surface,
+                "resources": resources_surface,
+                "resourceTemplates": templates_surface,
+                "prompts": prompts_surface,
+                "declarationSources": declaration_sources,
+            }
+            return _build_snapshot(
+                generated_at=generated_at,
                 scanned_command=[command, *args],
                 server_name=server_name,
                 protocol_version=protocol_version,
-                capabilities={"tools": has_tools, "resources": has_resources, "prompts": has_prompts},
+                capabilities={"tools": bool(has_tools), "resources": bool(has_resources), "prompts": bool(has_prompts)},
                 status=status,
-                tools=tools,
-                resource_uris=resource_uris,
-                template_uris=template_uris,
-                prompts=prompts_info,
+                coverage=coverage,
+                surface=surface,
+                tools_for_text=tools,
+                risk=risk,
                 signals=signals,
                 notes=notes,
-                risk=risk,
                 errors=errors,
-                tool_capabilities=tool_capabilities,
             )
 
 
+def _json_pointer_escape_token(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _manifest_tool_caps_entry_map_from_surface(surface: dict) -> dict[str, dict]:
+    """
+    Return manifest tool -> capability entry mapping from a (canonical) surface dict.
+
+    Note: this uses canonicalized declarationSources, so toolCapabilities ordering and operations
+    ordering should already be normalized by `_canonicalize_surface`.
+    """
+    caps: dict[str, dict] = {}
+    for src in surface.get("declarationSources") or []:
+        if not isinstance(src, dict) or src.get("name") != "mcp_manifest":
+            continue
+        extracted = src.get("extracted") or {}
+        if not isinstance(extracted, dict):
+            continue
+        for e in (extracted.get("toolCapabilities") or []):
+            if isinstance(e, dict) and e.get("tool"):
+                caps[str(e["tool"])] = e
+    return caps
+
+
+def _compute_surface_changes(before_surface: dict, after_surface: dict) -> list[dict]:
+    """
+    Compute stable factual change records between two surfaces.
+
+    Important: paths emitted here are stable semantic paths (JSON-Pointer-escaped) and are not
+    guaranteed to be literal pointers into the array-based serialized snapshot.
+    """
+    b = _canonicalize_surface(before_surface or {})
+    a = _canonicalize_surface(after_surface or {})
+
+    changes: list[dict] = []
+
+    def add(rec: dict) -> None:
+        changes.append(rec)
+
+    def map_by(items: list[dict], key: str) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for it in items or []:
+            if isinstance(it, dict) and it.get(key):
+                out[str(it[key])] = it
+        return out
+
+    # Tools
+    bt = map_by(b.get("tools") or [], "name")
+    at = map_by(a.get("tools") or [], "name")
+    for name in sorted(set(at) - set(bt)):
+        add({"type": "tool_added", "entityType": "tool", "entityId": name, "path": ""})
+    for name in sorted(set(bt) - set(at)):
+        add({"type": "tool_removed", "entityType": "tool", "entityId": name, "path": ""})
+    for name in sorted(set(bt) & set(at)):
+        btool = bt[name]
+        atool = at[name]
+        if (btool.get("description") or "") != (atool.get("description") or ""):
+            add(
+                {
+                    "type": "value_changed",
+                    "entityType": "tool",
+                    "entityId": name,
+                    "path": "/description",
+                    "before": btool.get("description"),
+                    "after": atool.get("description"),
+                }
+            )
+        if btool.get("inputSchema") != atool.get("inputSchema"):
+            add(
+                {
+                    "type": "value_changed",
+                    "entityType": "tool",
+                    "entityId": name,
+                    "path": "/inputSchema",
+                    "before": btool.get("inputSchema"),
+                    "after": atool.get("inputSchema"),
+                }
+            )
+
+    # Resources
+    br = map_by(b.get("resources") or [], "uri")
+    ar = map_by(a.get("resources") or [], "uri")
+    for uri in sorted(set(ar) - set(br)):
+        add({"type": "resource_added", "entityType": "resource", "entityId": uri, "path": ""})
+    for uri in sorted(set(br) - set(ar)):
+        add({"type": "resource_removed", "entityType": "resource", "entityId": uri, "path": ""})
+    for uri in sorted(set(br) & set(ar)):
+        bres = br[uri]
+        ares = ar[uri]
+        for field in ("name", "title", "description", "mimeType", "annotations"):
+            if bres.get(field) != ares.get(field):
+                add(
+                    {
+                        "type": "value_changed",
+                        "entityType": "resource",
+                        "entityId": uri,
+                        "path": f"/{field}",
+                        "before": bres.get(field),
+                        "after": ares.get(field),
+                    }
+                )
+
+    # Resource templates
+    btpl = map_by(b.get("resourceTemplates") or [], "uriTemplate")
+    atpl = map_by(a.get("resourceTemplates") or [], "uriTemplate")
+    for uri in sorted(set(atpl) - set(btpl)):
+        add({"type": "resource_template_added", "entityType": "resource_template", "entityId": uri, "path": ""})
+    for uri in sorted(set(btpl) - set(atpl)):
+        add({"type": "resource_template_removed", "entityType": "resource_template", "entityId": uri, "path": ""})
+    for uri in sorted(set(btpl) & set(atpl)):
+        btmp = btpl[uri]
+        atmp = atpl[uri]
+        for field in ("name", "title", "description", "mimeType", "annotations"):
+            if btmp.get(field) != atmp.get(field):
+                add(
+                    {
+                        "type": "value_changed",
+                        "entityType": "resource_template",
+                        "entityId": uri,
+                        "path": f"/{field}",
+                        "before": btmp.get(field),
+                        "after": atmp.get(field),
+                    }
+                )
+
+    # Prompts
+    bp = map_by(b.get("prompts") or [], "name")
+    ap = map_by(a.get("prompts") or [], "name")
+    for name in sorted(set(ap) - set(bp)):
+        add({"type": "prompt_added", "entityType": "prompt", "entityId": name, "path": ""})
+    for name in sorted(set(bp) - set(ap)):
+        add({"type": "prompt_removed", "entityType": "prompt", "entityId": name, "path": ""})
+    for name in sorted(set(bp) & set(ap)):
+        bpr = bp[name]
+        apr = ap[name]
+        if bpr.get("description") != apr.get("description"):
+            add(
+                {
+                    "type": "value_changed",
+                    "entityType": "prompt",
+                    "entityId": name,
+                    "path": "/description",
+                    "before": bpr.get("description"),
+                    "after": apr.get("description"),
+                }
+            )
+
+        b_args = map_by(bpr.get("arguments") or [], "name")
+        a_args = map_by(apr.get("arguments") or [], "name")
+        for arg in sorted(set(a_args) - set(b_args)):
+            add(
+                {
+                    "type": "value_added",
+                    "entityType": "prompt",
+                    "entityId": name,
+                    "path": f"/arguments/{_json_pointer_escape_token(arg)}",
+                    "value": a_args[arg],
+                }
+            )
+        for arg in sorted(set(b_args) - set(a_args)):
+            add(
+                {
+                    "type": "value_removed",
+                    "entityType": "prompt",
+                    "entityId": name,
+                    "path": f"/arguments/{_json_pointer_escape_token(arg)}",
+                    "value": b_args[arg],
+                }
+            )
+        for arg in sorted(set(b_args) & set(a_args)):
+            ba = b_args[arg]
+            aa = a_args[arg]
+            for field in ("description", "required", "schema"):
+                if ba.get(field) != aa.get(field):
+                    add(
+                        {
+                            "type": "value_changed",
+                            "entityType": "prompt",
+                            "entityId": name,
+                            "path": f"/arguments/{_json_pointer_escape_token(arg)}/{field}",
+                            "before": ba.get(field),
+                            "after": aa.get(field),
+                        }
+                    )
+
+    # Declaration sources (identity: (sourceType, name, uri))
+    def src_key(s: dict) -> tuple[str, str, str]:
+        return (str(s.get("sourceType") or ""), str(s.get("name") or ""), str(s.get("uri") or ""))
+
+    b_src_map: dict[tuple[str, str, str], dict] = {}
+    for s in (b.get("declarationSources") or []):
+        if isinstance(s, dict):
+            b_src_map[src_key(s)] = s
+
+    a_src_map: dict[tuple[str, str, str], dict] = {}
+    for s in (a.get("declarationSources") or []):
+        if isinstance(s, dict):
+            a_src_map[src_key(s)] = s
+
+    for k in sorted(set(a_src_map) - set(b_src_map)):
+        add(
+            {
+                "type": "declaration_source_added",
+                "entityType": "declaration_source",
+                "entityId": "|".join(k),
+                "path": "",
+            }
+        )
+    for k in sorted(set(b_src_map) - set(a_src_map)):
+        add(
+            {
+                "type": "declaration_source_removed",
+                "entityType": "declaration_source",
+                "entityId": "|".join(k),
+                "path": "",
+            }
+        )
+    for k in sorted(set(b_src_map) & set(a_src_map)):
+        bs = b_src_map[k]
+        a_s = a_src_map[k]
+        if bs.get("extracted") != a_s.get("extracted"):
+            add(
+                {
+                    "type": "value_changed",
+                    "entityType": "declaration_source",
+                    "entityId": "|".join(k),
+                    "path": "/extracted",
+                    "before": bs.get("extracted"),
+                    "after": a_s.get("extracted"),
+                }
+            )
+
+    # Manifest / capabilities (declarationSources)
+    b_caps = _manifest_tool_caps_entry_map_from_surface(b)
+    a_caps = _manifest_tool_caps_entry_map_from_surface(a)
+    for tool in sorted(set(a_caps) - set(b_caps)):
+        add({"type": "manifest_tool_added", "entityType": "manifest_tool", "entityId": tool, "path": ""})
+    for tool in sorted(set(b_caps) - set(a_caps)):
+        add({"type": "manifest_tool_removed", "entityType": "manifest_tool", "entityId": tool, "path": ""})
+    for tool in sorted(set(b_caps) & set(a_caps)):
+        be = b_caps.get(tool) or {}
+        ae = a_caps.get(tool) or {}
+        if be.get("description") != ae.get("description"):
+            add(
+                {
+                    "type": "value_changed",
+                    "entityType": "manifest_tool",
+                    "entityId": tool,
+                    "path": "/description",
+                    "before": be.get("description"),
+                    "after": ae.get("description"),
+                }
+            )
+
+        b_ops = be.get("operations") or []
+        a_ops = ae.get("operations") or []
+        # Canonical form is sorted list; order changes should not appear here.
+        if b_ops != a_ops:
+            add(
+                {
+                    "type": "manifest_tool_changed",
+                    "entityType": "manifest_tool",
+                    "entityId": tool,
+                    "path": "/operations",
+                    "beforeCount": len(b_ops),
+                    "afterCount": len(a_ops),
+                }
+            )
+            try:
+                bset = set(b_ops)
+                aset = set(a_ops)
+                for op in sorted(aset - bset):
+                    add(
+                        {
+                            "type": "value_added",
+                            "entityType": "manifest_tool",
+                            "entityId": tool,
+                            "path": "/operations",
+                            "value": op,
+                        }
+                    )
+                for op in sorted(bset - aset):
+                    add(
+                        {
+                            "type": "value_removed",
+                            "entityType": "manifest_tool",
+                            "entityId": tool,
+                            "path": "/operations",
+                            "value": op,
+                        }
+                    )
+            except TypeError:
+                # Fall back to whole-list change only (still satisfies parity invariants).
+                pass
+
+    changes.sort(key=lambda r: (r.get("entityType", ""), r.get("entityId", ""), r.get("type", ""), r.get("path", "")))
+    return changes
+
+
 def diff_reports(before: dict, after: dict) -> str:
-    def tool_map(r: dict) -> dict[str, dict]:
-        return {t["name"]: t for t in r.get("tools", [])}
+    SUPPORTED_SNAPSHOT_FORMATS = {"1"}
 
-    before_tools = tool_map(before)
-    after_tools = tool_map(after)
-    added = sorted(set(after_tools) - set(before_tools))
-    removed = sorted(set(before_tools) - set(after_tools))
-    changed_risk = sorted(
-        name
-        for name in (set(before_tools) & set(after_tools))
-        if before_tools[name].get("risk") != after_tools[name].get("risk")
-    )
+    def is_snapshot(d: dict) -> bool:
+        return isinstance(d, dict) and "snapshotFormatVersion" in d and "surface" in d and "observation" in d
 
-    def list_diff(before_list: list[str], after_list: list[str]) -> tuple[list[str], list[str]]:
-        return sorted(set(after_list) - set(before_list)), sorted(set(before_list) - set(after_list))
+    def legacy_to_snapshot(r: dict) -> tuple[dict, str]:
+        server = r.get("server") or {}
+        generated_at = r.get("generatedAt") or datetime.now(timezone.utc).isoformat()
+        protocol_version = server.get("protocolVersion") or "unknown"
+        server_name = server.get("name") or "unknown"
+        scanned = r.get("scannedCommand") or []
+        status = r.get("status") or "ok"
+        capabilities = r.get("capabilities") or {"tools": False, "resources": False, "prompts": False}
+        notes = r.get("notes") or []
+        errors = r.get("errors") or []
+        local_tools = r.get("tools") or []
+        risk = r.get("risk") or {}
+        signals = r.get("signals") or []
 
-    res_added, res_removed = list_diff(before.get("resources", []), after.get("resources", []))
-    tmpl_added, tmpl_removed = list_diff(before.get("resourceTemplates", []), after.get("resourceTemplates", []))
+        # Legacy lacks tool schemas; treat as partial.
+        surface_tools = [{"name": t.get("name"), "description": t.get("description"), "inputSchema": None} for t in (local_tools or []) if isinstance(t, dict)]
+        surface_resources = [{"uri": u} for u in (r.get("resources") or [])]
+        surface_templates = [{"uriTemplate": u} for u in (r.get("resourceTemplates") or [])]
+        legacy_prompts = []
+        for p in (r.get("prompts") or []):
+            if not isinstance(p, dict):
+                continue
+            arg_objs = []
+            for a in (p.get("arguments") or []):
+                arg_objs.append({"name": a})
+            legacy_prompts.append({"name": p.get("name"), "description": p.get("description"), "arguments": arg_objs})
+        decl_sources: list[dict] = []
+        if isinstance(r.get("manifest"), list):
+            decl_sources.append(
+                {
+                    "sourceType": "legacy",
+                    "name": "mcp_manifest",
+                    "uri": None,
+                    "status": "parsed",
+                    "extracted": {"toolCapabilities": r.get("manifest")},
+                }
+            )
 
-    before_prompts = sorted(p.get("name") for p in before.get("prompts", []) if p.get("name"))
-    after_prompts = sorted(p.get("name") for p in after.get("prompts", []) if p.get("name"))
-    pr_added, pr_removed = list_diff(before_prompts, after_prompts)
+        coverage = {
+            "tools": {"declaredSupported": None, "attempted": False, "completed": False, "errorRule": "legacy"},
+            "resources": {"declaredSupported": None, "attempted": False, "completed": False, "errorRule": "legacy"},
+            "resourceTemplates": {"declaredSupported": None, "attempted": False, "completed": False, "errorRule": "legacy"},
+            "prompts": {"declaredSupported": None, "attempted": False, "completed": False, "errorRule": "legacy"},
+            "manifest": {"declaredSupported": None, "attempted": False, "completed": False, "errorRule": "legacy"},
+        }
+        snap = _build_snapshot(
+            generated_at=str(generated_at),
+            scanned_command=list(scanned) if isinstance(scanned, list) else [],
+            server_name=str(server_name),
+            protocol_version=str(protocol_version),
+            capabilities=capabilities,
+            status=str(status),
+            coverage=coverage,
+            surface={
+                "tools": surface_tools,
+                "resources": surface_resources,
+                "resourceTemplates": surface_templates,
+                "prompts": legacy_prompts,
+                "declarationSources": decl_sources,
+            },
+            tools_for_text=list(local_tools) if isinstance(local_tools, list) else [],
+            risk=risk,
+            signals=signals,
+            notes=notes,
+            errors=errors,
+        )
+        # Force legacy conversion to partial regardless of coverage heuristics.
+        snap["surfaceCompleteness"] = "partial"
+        snap.pop("surfaceDigest", None)
+        snap.pop("surfaceEntityDigests", None)
+        return snap, "Legacy report: tool schemas were not captured; structural comparison is limited."
 
-    def fmt_risk(r: dict) -> str:
-        rr = r.get("risk", {}) if isinstance(r, dict) else {}
-        return f'{rr.get("write", 0)} write, {rr.get("destructive", 0)} destructive, {rr.get("read", 0)} read-only'
+    def coerce_snapshot(d: dict) -> tuple[dict, list[str]]:
+        if is_snapshot(d):
+            ver = str(d.get("snapshotFormatVersion"))
+            if ver not in SUPPORTED_SNAPSHOT_FORMATS:
+                raise ValueError(f"Unsupported snapshotFormatVersion: {ver}")
+            return d, []
+        snap, w = legacy_to_snapshot(d)
+        return snap, [w]
+
+    b, bw = coerce_snapshot(before)
+    a, aw = coerce_snapshot(after)
+    warnings = bw + aw
+
+    b_obs = b.get("observation") or {}
+    a_obs = a.get("observation") or {}
+    b_surface = b.get("surface") or {}
+    a_surface = a.get("surface") or {}
+    b_can = _canonicalize_surface(b_surface)
+    a_can = _canonicalize_surface(a_surface)
 
     lines: list[str] = []
     lines.append("Diff\n")
-    lines.append(f'  Before: {before.get("server", {}).get("name", "unknown")} ({fmt_risk(before)})')
-    lines.append(f'  After:  {after.get("server", {}).get("name", "unknown")} ({fmt_risk(after)})\n')
+    for w in warnings:
+        lines.append(f"  WARNING: {w}")
+    if warnings:
+        lines.append("")
 
-    if added or removed or changed_risk:
+    b_name = b_obs.get("serverName", "unknown")
+    a_name = a_obs.get("serverName", "unknown")
+    b_comp = b.get("surfaceCompleteness", "partial")
+    a_comp = a.get("surfaceCompleteness", "partial")
+    lines.append(f"  Before: {b_name} (surface: {b_comp})")
+    lines.append(f"  After:  {a_name} (surface: {a_comp})")
+
+    b_digest = b.get("surfaceDigest")
+    a_digest = a.get("surfaceDigest")
+    if b_digest and a_digest:
+        lines.append(f"\n  surfaceDigest:\n    before: {b_digest}\n    after:  {a_digest}\n")
+    else:
+        lines.append("")
+        if b_comp != "complete" or a_comp != "complete":
+            lines.append("  Note: surfaceDigest is omitted unless both surfaces are complete.\n")
+
+    def tool_map(surface: dict) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for t in surface.get("tools") or []:
+            if isinstance(t, dict) and t.get("name"):
+                out[str(t["name"])] = t
+        return out
+
+    def prompt_map(surface: dict) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for p in surface.get("prompts") or []:
+            if isinstance(p, dict) and p.get("name"):
+                out[str(p["name"])] = p
+        return out
+
+    def map_by(items: list[dict], key: str) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for it in items or []:
+            if isinstance(it, dict) and it.get(key):
+                out[str(it[key])] = it
+        return out
+
+    def diff_values(path: str, bv: Any, av: Any, out_lines: list[str], *, limit: int = 60) -> None:
+        diffs: list[tuple[str, Any, Any]] = []
+
+        def rec(p: str, x: Any, y: Any) -> None:
+            if x == y:
+                return
+            if type(x) != type(y):
+                diffs.append((p, x, y))
+                return
+            if isinstance(x, dict):
+                keys = sorted(set(x.keys()) | set(y.keys()))
+                for k in keys:
+                    if k not in x:
+                        diffs.append((f"{p}.{k}" if p else k, None, y.get(k)))
+                    elif k not in y:
+                        diffs.append((f"{p}.{k}" if p else k, x.get(k), None))
+                    else:
+                        rec(f"{p}.{k}" if p else k, x.get(k), y.get(k))
+                return
+            if isinstance(x, list):
+                # Improve readability for common schema list expansions.
+                if p.endswith(".enum") or p.endswith(".required"):
+                    try:
+                        xb = set(x)
+                        yb = set(y)
+                        added = sorted(yb - xb)
+                        removed = sorted(xb - yb)
+                        if added:
+                            diffs.append((p + " (+)", added, None))
+                        if removed:
+                            diffs.append((p + " (-)", removed, None))
+                        return
+                    except TypeError:
+                        pass
+                diffs.append((p, x, y))
+                return
+            diffs.append((p, x, y))
+
+        rec(path, bv, av)
+        for i, (p, x, y) in enumerate(diffs):
+            if i >= limit:
+                out_lines.append(f"    … ({len(diffs) - limit} more changes)")
+                break
+            out_lines.append(f"    ~ {p}: {json.dumps(x, ensure_ascii=False)[:160]} -> {json.dumps(y, ensure_ascii=False)[:160]}")
+
+    # Tools
+    b_tools = tool_map(b_can)
+    a_tools = tool_map(a_can)
+    t_added = sorted(set(a_tools) - set(b_tools))
+    t_removed = sorted(set(b_tools) - set(a_tools))
+    t_common = sorted(set(b_tools) & set(a_tools))
+    tool_changes: list[str] = []
+    for name in t_common:
+        bt = b_tools[name]
+        at = a_tools[name]
+        if (bt.get("description") or "") != (at.get("description") or ""):
+            tool_changes.append(f"    ~ {name}.description")
+        if _canonical_json_bytes(bt.get("inputSchema")) != _canonical_json_bytes(at.get("inputSchema")):
+            tool_changes.append(f"    ~ {name}.inputSchema")
+
+    if t_added or t_removed or tool_changes:
         lines.append("  Tools:")
-        for name in added:
-            lines.append(f'    + {name} ({after_tools[name].get("risk")})')
-        for name in removed:
-            lines.append(f'    - {name} ({before_tools[name].get("risk")})')
-        for name in changed_risk:
-            lines.append(f'    ~ {name}: {before_tools[name].get("risk")} -> {after_tools[name].get("risk")}')
+        for n in t_added:
+            lines.append(f"    + {n}")
+        for n in t_removed:
+            lines.append(f"    - {n}")
+        # Expand per-tool structural diffs for changed tools (bounded).
+        for name in t_common:
+            bt = b_tools[name]
+            at = a_tools[name]
+            if (bt.get("description") or "") != (at.get("description") or ""):
+                lines.append(f"    ~ {name}.description: {json.dumps(bt.get('description'), ensure_ascii=False)} -> {json.dumps(at.get('description'), ensure_ascii=False)}")
+            b_schema = bt.get("inputSchema")
+            a_schema = at.get("inputSchema")
+            if _canonical_json_bytes(b_schema) != _canonical_json_bytes(a_schema):
+                lines.append(f"    ~ {name}.inputSchema:")
+                diff_values(f"{name}.inputSchema", b_schema, a_schema, lines, limit=25)
         lines.append("")
 
-    if res_added or res_removed or tmpl_added or tmpl_removed:
+    # Resources / templates
+    b_res = map_by(b_can.get("resources") or [], "uri")
+    a_res = map_by(a_can.get("resources") or [], "uri")
+    b_tmpl = map_by(b_can.get("resourceTemplates") or [], "uriTemplate")
+    a_tmpl = map_by(a_can.get("resourceTemplates") or [], "uriTemplate")
+    res_added = sorted(set(a_res) - set(b_res))
+    res_removed = sorted(set(b_res) - set(a_res))
+    res_common = sorted(set(b_res) & set(a_res))
+    res_changed = [u for u in res_common if b_res[u] != a_res[u]]
+    tmpl_added = sorted(set(a_tmpl) - set(b_tmpl))
+    tmpl_removed = sorted(set(b_tmpl) - set(a_tmpl))
+    tmpl_common = sorted(set(b_tmpl) & set(a_tmpl))
+    tmpl_changed = [u for u in tmpl_common if b_tmpl[u] != a_tmpl[u]]
+    if res_added or res_removed or res_changed or tmpl_added or tmpl_removed or tmpl_changed:
         lines.append("  Resources:")
-        for uri in res_added:
-            lines.append(f"    + {uri}")
-        for uri in res_removed:
-            lines.append(f"    - {uri}")
-        for uri in tmpl_added:
-            lines.append(f"    + {uri}")
-        for uri in tmpl_removed:
-            lines.append(f"    - {uri}")
+        for u in res_added:
+            lines.append(f"    + {u}")
+        for u in res_removed:
+            lines.append(f"    - {u}")
+        for u in res_changed:
+            lines.append(f"    ~ {u}")
+        for u in tmpl_added:
+            lines.append(f"    + {u}")
+        for u in tmpl_removed:
+            lines.append(f"    - {u}")
+        for u in tmpl_changed:
+            lines.append(f"    ~ {u}")
         lines.append("")
 
-    if pr_added or pr_removed:
+    # Prompts
+    b_prompts = prompt_map(b_can)
+    a_prompts = prompt_map(a_can)
+    p_added = sorted(set(a_prompts) - set(b_prompts))
+    p_removed = sorted(set(b_prompts) - set(a_prompts))
+    p_common = sorted(set(b_prompts) & set(a_prompts))
+    p_changed: list[str] = []
+    for name in p_common:
+        bp = b_prompts[name]
+        ap = a_prompts[name]
+        if bp != ap:
+            p_changed.append(name)
+    if p_added or p_removed or p_changed:
         lines.append("  Prompts:")
-        for name in pr_added:
-            lines.append(f"    + {name}")
-        for name in pr_removed:
-            lines.append(f"    - {name}")
+        for n in p_added:
+            lines.append(f"    + {n}")
+        for n in p_removed:
+            lines.append(f"    - {n}")
+        for n in p_changed:
+            lines.append(f"    ~ {n}")
         lines.append("")
 
-    # Manifest / action-level capability diff.
-    def caps_map(r: dict) -> dict[str, list[str] | None]:
-        return {
-            e["tool"]: e.get("operations")
-            for e in r.get("manifest", [])
-            if isinstance(e, dict) and "tool" in e
-        }
-
-    before_caps = caps_map(before)
-    after_caps = caps_map(after)
+    # Manifest / action-level capability diff (from declarationSources).
+    before_caps = _manifest_tool_caps_entry_map_from_surface(b_can)
+    after_caps = _manifest_tool_caps_entry_map_from_surface(a_can)
     caps_added = sorted(set(after_caps) - set(before_caps))
     caps_removed = sorted(set(before_caps) - set(after_caps))
     caps_changed: list[tuple[str, list[str], list[str]]] = []
     for name in sorted(set(before_caps) & set(after_caps)):
-        b_ops = set(before_caps[name] or [])
-        a_ops = set(after_caps[name] or [])
-        if b_ops != a_ops:
+        be = before_caps.get(name) or {}
+        ae = after_caps.get(name) or {}
+        b_ops_raw = be.get("operations") or []
+        a_ops_raw = ae.get("operations") or []
+        try:
+            b_ops = set(b_ops_raw)
+            a_ops = set(a_ops_raw)
+        except TypeError:
+            # If operations aren't hashable, fall back to whole-list comparison.
+            if b_ops_raw != a_ops_raw:
+                caps_changed.append((name, [], []))
+            continue
+        # If any identity-bearing manifest metadata changed, treat as a manifest change.
+        if be != ae:
             ops_added = sorted(a_ops - b_ops)
             ops_removed = sorted(b_ops - a_ops)
             caps_changed.append((name, ops_added, ops_removed))
 
     has_caps_diff = caps_added or caps_removed or caps_changed
     if has_caps_diff:
-        # "now visible" when the before report had no manifest at all.
-        if not before_caps and after_caps:
-            lines.append("  Capabilities (now visible):")
-        else:
-            lines.append("  Capabilities:")
+        lines.append("  Capabilities (manifest-declared):")
         for name in caps_added:
-            ops = after_caps[name]
+            ops = (after_caps.get(name) or {}).get("operations")
             count = f" ({len(ops)} operations)" if ops else ""
             lines.append(f"    + {name}{count}")
         for name in caps_removed:
-            ops = before_caps[name]
+            ops = (before_caps.get(name) or {}).get("operations")
             count = f" ({len(ops)} operations)" if ops else ""
             lines.append(f"    - {name}{count}")
         for name, ops_added_list, ops_removed_list in caps_changed:
-            b_count = len(before_caps[name] or [])
-            a_count = len(after_caps[name] or [])
+            b_count = len(((before_caps.get(name) or {}).get("operations") or []))
+            a_count = len(((after_caps.get(name) or {}).get("operations") or []))
             parts = []
             if ops_added_list:
                 parts.append(f"added: {', '.join(ops_added_list)}")
@@ -863,20 +1976,20 @@ def diff_reports(before: dict, after: dict) -> str:
             lines.append(f"    ~ {name}: {b_count} operations -> {a_count} operations{detail}")
         lines.append("")
 
-    has_any_change = (
-        added or removed or changed_risk
-        or res_added or res_removed or tmpl_added or tmpl_removed
-        or pr_added or pr_removed
-        or has_caps_diff
-    )
-    if not has_any_change:
+    if len(lines) <= 5 or lines[-1] != "":
+        # Ensure trailing newline and a clean end.
+        pass
+
+    # If nothing changed beyond header.
+    has_change_sections = any(h in lines for h in ("  Tools:", "  Resources:", "  Prompts:", "  Capabilities (manifest-declared):"))
+    if not has_change_sections:
         lines.append("  No changes detected.\n")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _report_json(report: dict) -> str:
-    """Serialize a report dict to a stable JSON string."""
+    """Serialize a snapshot dict to a stable JSON string (for storage/output)."""
     return json.dumps(report, indent=2, sort_keys=True) + "\n"
 
 
@@ -920,27 +2033,38 @@ def _read_captured_stderr(errbuf: TextIO | None) -> str:
     return errbuf.read().strip()
 
 
-def _postprocess_success(report: dict, server_err: str, *, verbose: bool) -> None:
+def _postprocess_success(snapshot: dict, server_err: str, *, verbose: bool) -> None:
     """
-    Post-process a successful inspect() report using captured stderr.
+    Post-process a successful inspect() snapshot using captured stderr.
 
-    Mutates ``report`` in place: merges stderr-derived notes, sets auth_gated status.
+    Mutates ``snapshot`` in place: merges stderr-derived notes, sets auth_gated status.
     """
     if server_err:
         notes, signals = stderr_notes(server_err)
         if notes:
-            report["notes"] = sorted(
-                (report.get("notes") or []) + notes,
+            obs = snapshot.get("observation") or {}
+            obs["notes"] = sorted(
+                (obs.get("notes") or []) + notes,
                 key=lambda n: (n.get("kind", ""), n.get("name", ""), n.get("rule", "")),
             )
+            snapshot["observation"] = obs
 
-        if signals.get("has_auth_hint") and (
-            not report.get("tools")
-            and not report.get("resources")
-            and not report.get("resourceTemplates")
-            and not report.get("prompts")
-        ):
-            report["status"] = "auth_gated"
+        # Auth-gated heuristic: stderr auth hint + empty declared surface.
+        if signals.get("has_auth_hint"):
+            surface = snapshot.get("surface") or {}
+            if (
+                not surface.get("tools")
+                and not surface.get("resources")
+                and not surface.get("resourceTemplates")
+                and not surface.get("prompts")
+            ):
+                obs = snapshot.get("observation") or {}
+                obs["status"] = "auth_gated"
+                snapshot["observation"] = obs
+                # Auth-gated surfaces are incomplete; do not emit a stable digest.
+                snapshot["surfaceCompleteness"] = "partial"
+                snapshot.pop("surfaceDigest", None)
+                snapshot.pop("surfaceEntityDigests", None)
 
     if verbose and server_err:
         sys.stderr.write("\n[server stderr]\n" + server_err + "\n")
@@ -985,19 +2109,27 @@ def _handle_inspect_failure(
     else:
         err_snippet = _normalize_text(str(exc))
 
-    report = _build_report(
+    generated_at = datetime.now(timezone.utc).isoformat()
+    coverage = {
+        "tools": {"declaredSupported": None, "attempted": False, "completed": False},
+        "resources": {"declaredSupported": None, "attempted": False, "completed": False},
+        "resourceTemplates": {"declaredSupported": None, "attempted": False, "completed": False},
+        "prompts": {"declaredSupported": None, "attempted": False, "completed": False},
+        "manifest": {"declaredSupported": None, "attempted": False, "completed": False},
+    }
+    snapshot = _build_snapshot(
+        generated_at=generated_at,
         scanned_command=[command, *args],
         server_name="unknown",
         protocol_version="unknown",
         capabilities={"tools": False, "resources": False, "prompts": False},
         status=status,
-        tools=[],
-        resource_uris=[],
-        template_uris=[],
-        prompts=[],
+        coverage=coverage,
+        surface={"tools": [], "resources": [], "resourceTemplates": [], "prompts": [], "declarationSources": []},
+        tools_for_text=[],
+        risk={"read": 0, "write": 0, "destructive": 0},
         signals=[],
         notes=stderr_notes_list,
-        risk={"read": 0, "write": 0, "destructive": 0},
         errors=[
             {
                 "kind": "mcp",
@@ -1021,7 +2153,7 @@ def _handle_inspect_failure(
     else:
         error_message = f"mcp-preflight: error: {_normalize_text(str(exc))}"
 
-    return report, error_message
+    return snapshot, error_message
 
 
 def _write_failure_stderr(server_err: str, *, verbose: bool, has_auth_hint: bool) -> None:
@@ -1040,7 +2172,7 @@ def _write_failure_stderr(server_err: str, *, verbose: bool, has_auth_hint: bool
 
 
 def _emit_report(report: dict, *, save_path: Path | None, as_json: bool) -> None:
-    """Save and/or print the JSON report."""
+    """Save and/or print the JSON snapshot."""
     if save_path:
         save_path.write_text(_report_json(report), encoding="utf-8")
     if as_json:

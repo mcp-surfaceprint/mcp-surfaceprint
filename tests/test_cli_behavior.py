@@ -30,8 +30,8 @@ def test_cli_save_writes_json_report() -> None:
         )
         assert proc.stdout.strip()
         assert out.exists()
-        report = json.loads(out.read_text(encoding="utf-8"))
-        assert report["server"]["name"] == "toy-open"
+        snap = json.loads(out.read_text(encoding="utf-8"))
+        assert snap["observation"]["serverName"] == "toy-open"
 
 
 def test_cli_no_signals_disables_signal_output_in_json() -> None:
@@ -50,8 +50,8 @@ def test_cli_no_signals_disables_signal_output_in_json() -> None:
         text=True,
         check=True,
     )
-    report = json.loads(proc.stdout)
-    assert report["signals"] == []
+    snap = json.loads(proc.stdout)
+    assert snap["observation"]["localAnnotations"]["signals"] == []
 
 
 def test_cli_env_requires_key_value() -> None:
@@ -66,8 +66,44 @@ def test_cli_env_requires_key_value() -> None:
 
 
 def test_cli_diff_subcommand_prints_diff() -> None:
-    before = {"server": {"name": "s"}, "risk": {"write": 0, "destructive": 0, "read": 0}, "tools": [], "resources": [], "resourceTemplates": [], "prompts": []}
-    after = {"server": {"name": "s"}, "risk": {"write": 1, "destructive": 0, "read": 0}, "tools": [{"name": "t", "risk": "write"}], "resources": [], "resourceTemplates": [], "prompts": []}
+    before = {
+        "snapshotFormatVersion": "1",
+        "surfaceCompleteness": "complete",
+        "surface": {"tools": [], "resources": [], "resourceTemplates": [], "prompts": [], "declarationSources": []},
+        "surfaceDigest": "sha256:" + "0" * 64,
+        "surfaceEntityDigests": {"tools": {}, "prompts": {}, "resources": {}, "resourceTemplates": {}},
+        "observation": {
+            "generatedAt": "2026-01-01T00:00:00Z",
+            "protocolVersion": "x",
+            "serverName": "s",
+            "command": [],
+            "status": "ok",
+            "capabilities": {"tools": True, "resources": False, "prompts": False},
+            "coverage": {},
+            "notes": [],
+            "errors": [],
+            "localAnnotations": {"tools": [], "risk": {}, "signals": []},
+        },
+    }
+    after = {
+        "snapshotFormatVersion": "1",
+        "surfaceCompleteness": "complete",
+        "surface": {"tools": [{"name": "t", "description": "", "inputSchema": {"type": "object"}}], "resources": [], "resourceTemplates": [], "prompts": [], "declarationSources": []},
+        "surfaceDigest": "sha256:" + "1" * 64,
+        "surfaceEntityDigests": {"tools": {"t": "sha256:" + "2" * 64}, "prompts": {}, "resources": {}, "resourceTemplates": {}},
+        "observation": {
+            "generatedAt": "2026-01-01T00:00:00Z",
+            "protocolVersion": "x",
+            "serverName": "s",
+            "command": [],
+            "status": "ok",
+            "capabilities": {"tools": True, "resources": False, "prompts": False},
+            "coverage": {},
+            "notes": [],
+            "errors": [],
+            "localAnnotations": {"tools": [], "risk": {}, "signals": []},
+        },
+    }
 
     with tempfile.TemporaryDirectory() as td:
         b = Path(td) / "before.json"
@@ -83,5 +119,5 @@ def test_cli_diff_subcommand_prints_diff() -> None:
             check=True,
         )
         assert "Diff" in proc.stdout
-        assert "+ t (write)" in proc.stdout
+        assert "+ t" in proc.stdout
 

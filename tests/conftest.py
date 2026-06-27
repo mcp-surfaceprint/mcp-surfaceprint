@@ -21,6 +21,6 @@ def run_preflight_json(args: list[str], *, check: bool = True) -> subprocess.Com
 
 
 def parse_preflight_json(args: list[str]) -> dict:
-    """Run mcp-preflight with --json, parse stdout, and return the report dict."""
+    """Run mcp-preflight with --json, parse stdout, and return the snapshot dict."""
     proc = run_preflight_json(args)
     return json.loads(proc.stdout)
