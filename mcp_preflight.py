@@ -28,6 +28,8 @@ from typing import Any, TextIO
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+__version__ = "0.3.0"
+
 # Exception groups are built-in in Python 3.11+, but on 3.10 they're provided by the
 # `exceptiongroup` backport (often installed as a transitive dependency).
 try:  # Python 3.11+
@@ -1659,6 +1661,338 @@ def _compute_surface_changes(before_surface: dict, after_surface: dict) -> list[
     return changes
 
 
+def _snapshot_comparison_metadata(snap: dict) -> dict:
+    obs = snap.get("observation") if isinstance(snap, dict) else None
+    if not isinstance(obs, dict):
+        return {}
+    cm = obs.get("comparisonMetadata")
+    return cm if isinstance(cm, dict) else {}
+
+
+def _snapshot_is_legacy(snap: dict) -> bool:
+    cm = _snapshot_comparison_metadata(snap)
+    return bool(cm.get("legacy"))
+
+
+def _snapshot_has_evidence_gap(snap: dict, *, entity_type: str, path: str) -> bool:
+    cm = _snapshot_comparison_metadata(snap)
+    gaps = cm.get("evidenceGaps")
+    if not isinstance(gaps, list):
+        return False
+    for g in gaps:
+        if not isinstance(g, dict):
+            continue
+        if g.get("entityType") != entity_type:
+            continue
+
+        # Explicit per-path list.
+        gpaths = g.get("paths")
+        if isinstance(gpaths, list) and all(isinstance(p, str) for p in gpaths):
+            if path in gpaths:
+                return True
+
+        # Regex-style matcher for semantic paths.
+        pat = g.get("pathPattern")
+        if isinstance(pat, str) and pat:
+            try:
+                if re.match(pat, path):
+                    return True
+            except re.error:
+                # Ignore invalid patterns; treat as non-match.
+                pass
+
+        gpath = g.get("path")
+        if not isinstance(gpath, str) or not gpath:
+            continue
+        if gpath == "*" or gpath == path:
+            return True
+        if gpath.endswith("/*") and path.startswith(gpath[:-1]):
+            return True
+    return False
+
+
+def _compute_snapshot_comparison(before_snapshot: dict, after_snapshot: dict) -> dict:
+    """
+    Snapshot-level comparison wrapper.
+
+    For complete-vs-complete, identityComparable is True and changes come straight from
+    _compute_surface_changes().
+
+    If either side is legacy or partial, identityComparable is False and we:
+    - report limitations
+    - suppress changes that are not comparable due to evidence gaps
+    - emit evidenceChanges (e.g. newly observable tool schemas)
+    """
+    b = before_snapshot if isinstance(before_snapshot, dict) else {}
+    a = after_snapshot if isinstance(after_snapshot, dict) else {}
+    b_surface = b.get("surface") if isinstance(b.get("surface"), dict) else {}
+    a_surface = a.get("surface") if isinstance(a.get("surface"), dict) else {}
+
+    b_comp = b.get("surfaceCompleteness", "partial")
+    a_comp = a.get("surfaceCompleteness", "partial")
+    b_digest = b.get("surfaceDigest")
+    a_digest = a.get("surfaceDigest")
+    b_legacy = _snapshot_is_legacy(b)
+    a_legacy = _snapshot_is_legacy(a)
+
+    identity_comparable = bool(
+        (b_comp == "complete")
+        and (a_comp == "complete")
+        and bool(b_digest)
+        and bool(a_digest)
+        and not b_legacy
+        and not a_legacy
+    )
+
+    limitations: list[dict] = []
+    if not identity_comparable:
+        limitations.append(
+            {
+                "type": "identity_unavailable",
+                "message": "Complete-surface identity comparison is unavailable (legacy and/or partial snapshot involved).",
+            }
+        )
+
+    if b_legacy:
+        limitations.append(
+            {
+                "type": "legacy_format",
+                "side": "before",
+                "message": "Before snapshot was converted from a legacy report format; some evidence was not captured.",
+            }
+        )
+    if a_legacy:
+        limitations.append(
+            {
+                "type": "legacy_format",
+                "side": "after",
+                "message": "After snapshot was converted from a legacy report format; some evidence was not captured.",
+            }
+        )
+
+    def _coverage_limitations(snap: dict, *, side: str) -> tuple[list[dict], set[str]]:
+        obs = snap.get("observation")
+        if not isinstance(obs, dict):
+            return [], set()
+        cov = obs.get("coverage")
+        if not isinstance(cov, dict):
+            return [], set()
+        out: list[dict] = []
+        incomplete_sections: set[str] = set()
+        for section in sorted(cov.keys()):
+            entry = cov.get(section)
+            if not isinstance(entry, dict):
+                continue
+            attempted = entry.get("attempted")
+            completed = entry.get("completed")
+            if attempted is True and completed is False:
+                rule = entry.get("errorRule") or "incomplete"
+                incomplete_sections.add(str(section))
+                out.append(
+                    {
+                        "type": "coverage_incomplete",
+                        "side": side,
+                        "section": section,
+                        "errorRule": rule,
+                        "reason": rule,
+                        "message": f"{side.capitalize()} snapshot did not complete {section} inspection ({rule}).",
+                    }
+                )
+        return out, incomplete_sections
+
+    b_incomplete_sections: set[str] = set()
+    a_incomplete_sections: set[str] = set()
+    if b_comp != "complete":
+        lim, secs = _coverage_limitations(b, side="before")
+        limitations.extend(lim)
+        b_incomplete_sections |= secs
+    if a_comp != "complete":
+        lim, secs = _coverage_limitations(a, side="after")
+        limitations.extend(lim)
+        a_incomplete_sections |= secs
+
+    # Evidence-gap limitations (known legacy format omissions).
+    if _snapshot_has_evidence_gap(b, entity_type="tool", path="/inputSchema"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "before",
+                "entityType": "tool",
+                "path": "/inputSchema",
+                "message": "Tool input schemas were not captured by the legacy report format (before side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(a, entity_type="tool", path="/inputSchema"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "after",
+                "entityType": "tool",
+                "path": "/inputSchema",
+                "message": "Tool input schemas were not captured by the legacy report format (after side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(b, entity_type="resource", path="/description"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "before",
+                "entityType": "resource",
+                "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                "message": "Resource metadata fields were not captured by the legacy report format (before side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(a, entity_type="resource", path="/description"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "after",
+                "entityType": "resource",
+                "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                "message": "Resource metadata fields were not captured by the legacy report format (after side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(b, entity_type="resource_template", path="/description"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "before",
+                "entityType": "resource_template",
+                "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                "message": "Resource-template metadata fields were not captured by the legacy report format (before side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(a, entity_type="resource_template", path="/description"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "after",
+                "entityType": "resource_template",
+                "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                "message": "Resource-template metadata fields were not captured by the legacy report format (after side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(b, entity_type="prompt", path="/arguments/x/required"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "before",
+                "entityType": "prompt",
+                "pathPattern": r"^/arguments/[^/]+/(description|required|schema)$",
+                "message": "Prompt argument details were not captured by the legacy report format (before side).",
+            }
+        )
+    if _snapshot_has_evidence_gap(a, entity_type="prompt", path="/arguments/x/required"):
+        limitations.append(
+            {
+                "type": "evidence_gap",
+                "side": "after",
+                "entityType": "prompt",
+                "pathPattern": r"^/arguments/[^/]+/(description|required|schema)$",
+                "message": "Prompt argument details were not captured by the legacy report format (after side).",
+            }
+        )
+
+    changes = _compute_surface_changes(b_surface, a_surface)
+
+    # If either side did not complete inspection for a surface section, suppress changes for
+    # entity types owned by that section. This prevents "unknown" from being rendered as
+    # add/remove/change.
+    section_to_entity_types = {
+        "tools": {"tool"},
+        "resources": {"resource"},
+        "resourceTemplates": {"resource_template"},
+        "prompts": {"prompt"},
+        "manifest": {"manifest_tool"},
+    }
+    suppressed_entity_types: set[str] = set()
+    for sec in (b_incomplete_sections | a_incomplete_sections):
+        suppressed_entity_types |= section_to_entity_types.get(str(sec), set())
+    if suppressed_entity_types:
+        changes = [c for c in changes if c.get("entityType") not in suppressed_entity_types]
+
+    evidence_changes: list[dict] = []
+    tool_schema_gap_before = _snapshot_has_evidence_gap(b, entity_type="tool", path="/inputSchema")
+    tool_schema_gap_after = _snapshot_has_evidence_gap(a, entity_type="tool", path="/inputSchema")
+    if tool_schema_gap_before or tool_schema_gap_after:
+        # Suppress tool inputSchema changes when one side lacks schema evidence.
+        filtered: list[dict] = []
+        for c in changes:
+            if (
+                c.get("type") == "value_changed"
+                and c.get("entityType") == "tool"
+                and c.get("path") == "/inputSchema"
+                and (tool_schema_gap_before or tool_schema_gap_after)
+            ):
+                continue
+            filtered.append(c)
+        changes = filtered
+
+        # Emit observability changes for tool schemas.
+        b_tools = {t.get("name"): t for t in (b_surface.get("tools") or []) if isinstance(t, dict) and t.get("name")}
+        a_tools = {t.get("name"): t for t in (a_surface.get("tools") or []) if isinstance(t, dict) and t.get("name")}
+        common = sorted(set(b_tools) & set(a_tools))
+        for name in common:
+            bt = b_tools.get(name) or {}
+            at = a_tools.get(name) or {}
+            b_schema_present = bt.get("inputSchema") is not None
+            a_schema_present = at.get("inputSchema") is not None
+            if tool_schema_gap_before and a_schema_present:
+                evidence_changes.append(
+                    {
+                        "type": "field_became_observable",
+                        "entityType": "tool",
+                        "entityId": str(name),
+                        "path": "/inputSchema",
+                        "message": "Tool input schema became observable (legacy report did not capture schemas).",
+                    }
+                )
+            if tool_schema_gap_after and b_schema_present:
+                evidence_changes.append(
+                    {
+                        "type": "field_became_unobservable",
+                        "entityType": "tool",
+                        "entityId": str(name),
+                        "path": "/inputSchema",
+                        "message": "Tool input schema became unobservable (legacy report did not capture schemas).",
+                    }
+                )
+
+    # Suppress non-comparable change records for known evidence gaps. (This doesn't affect the current
+    # text renderer directly, but keeps the comparison model honest for future machine output.)
+    if _snapshot_has_evidence_gap(b, entity_type="resource", path="/description") or _snapshot_has_evidence_gap(a, entity_type="resource", path="/description"):
+        changes = [c for c in changes if not (c.get("entityType") == "resource" and c.get("type") == "value_changed")]
+    if _snapshot_has_evidence_gap(b, entity_type="resource_template", path="/description") or _snapshot_has_evidence_gap(a, entity_type="resource_template", path="/description"):
+        changes = [c for c in changes if not (c.get("entityType") == "resource_template" and c.get("type") == "value_changed")]
+    prompt_arg_details_gap = _snapshot_has_evidence_gap(b, entity_type="prompt", path="/arguments/x/required") or _snapshot_has_evidence_gap(
+        a, entity_type="prompt", path="/arguments/x/required"
+    )
+    if prompt_arg_details_gap:
+        # Only suppress nested arg-detail fields, not arg-name add/remove.
+        # (value_added/value_removed at /arguments/<arg> remain comparable)
+        arg_detail_pat = re.compile(r"^/arguments/[^/]+/(description|required|schema)$")
+        filtered_changes: list[dict] = []
+        for c in changes:
+            if c.get("entityType") != "prompt":
+                filtered_changes.append(c)
+                continue
+            p = c.get("path")
+            if isinstance(p, str) and arg_detail_pat.match(p):
+                continue
+            filtered_changes.append(c)
+        changes = filtered_changes
+
+    evidence_changes.sort(key=lambda r: (r.get("entityType", ""), r.get("entityId", ""), r.get("type", ""), r.get("path", "")))
+    limitations.sort(key=lambda r: (r.get("type", ""), r.get("side", ""), r.get("entityType", ""), r.get("path", "")))
+
+    return {
+        "identityComparable": identity_comparable,
+        "limitations": limitations,
+        "changes": changes,
+        "evidenceChanges": evidence_changes,
+    }
+
+
 def diff_reports(before: dict, after: dict) -> str:
     SUPPORTED_SNAPSHOT_FORMATS = {"1"}
 
@@ -1731,6 +2065,38 @@ def diff_reports(before: dict, after: dict) -> str:
             notes=notes,
             errors=errors,
         )
+        # Add evidence-gap metadata without changing surface semantics.
+        snap_obs = snap.get("observation")
+        if isinstance(snap_obs, dict):
+            snap_obs["comparisonMetadata"] = {
+                "legacy": True,
+                "evidenceGaps": [
+                    {
+                        "type": "field_not_captured",
+                        "entityType": "tool",
+                        "path": "/inputSchema",
+                        "reason": "legacy_format_not_captured",
+                    },
+                    {
+                        "type": "fields_not_captured",
+                        "entityType": "resource",
+                        "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                        "reason": "legacy_format_only_uris",
+                    },
+                    {
+                        "type": "fields_not_captured",
+                        "entityType": "resource_template",
+                        "paths": ["/name", "/title", "/description", "/mimeType", "/annotations"],
+                        "reason": "legacy_format_only_uri_templates",
+                    },
+                    {
+                        "type": "fields_not_captured",
+                        "entityType": "prompt",
+                        "pathPattern": r"^/arguments/[^/]+/(description|required|schema)$",
+                        "reason": "legacy_format_argument_details_not_captured",
+                    },
+                ],
+            }
         # Force legacy conversion to partial regardless of coverage heuristics.
         snap["surfaceCompleteness"] = "partial"
         snap.pop("surfaceDigest", None)
@@ -1777,8 +2143,134 @@ def diff_reports(before: dict, after: dict) -> str:
         lines.append(f"\n  surfaceDigest:\n    before: {b_digest}\n    after:  {a_digest}\n")
     else:
         lines.append("")
-        if b_comp != "complete" or a_comp != "complete":
-            lines.append("  Note: surfaceDigest is omitted unless both surfaces are complete.\n")
+        # No digest comparison shown unless both snapshots are complete; see identityComparable below.
+
+    comparison = _compute_snapshot_comparison(b, a)
+    identity_comparable = bool(comparison.get("identityComparable"))
+    limitations = comparison.get("limitations") if isinstance(comparison.get("limitations"), list) else []
+    evidence_changes = comparison.get("evidenceChanges") if isinstance(comparison.get("evidenceChanges"), list) else []
+    tool_schema_incomparable = any(
+        isinstance(l, dict) and l.get("type") == "evidence_gap" and l.get("entityType") == "tool" and l.get("path") == "/inputSchema"
+        for l in limitations
+    )
+    resource_meta_incomparable = any(
+        isinstance(l, dict)
+        and l.get("type") == "evidence_gap"
+        and l.get("entityType") == "resource"
+        and (l.get("path") == "*" or isinstance(l.get("paths"), list))
+        for l in limitations
+    )
+    template_meta_incomparable = any(
+        isinstance(l, dict)
+        and l.get("type") == "evidence_gap"
+        and l.get("entityType") == "resource_template"
+        and (l.get("path") == "*" or isinstance(l.get("paths"), list))
+        for l in limitations
+    )
+    prompt_arg_details_incomparable = any(
+        isinstance(l, dict)
+        and l.get("type") == "evidence_gap"
+        and l.get("entityType") == "prompt"
+        and (str(l.get("path")) in ("/arguments/*", "/arguments") or isinstance(l.get("pathPattern"), str))
+        for l in limitations
+    )
+    incomplete_sections: set[str] = set(
+        str(l.get("section"))
+        for l in limitations
+        if isinstance(l, dict) and l.get("type") == "coverage_incomplete" and l.get("section")
+    )
+    tools_incomparable = "tools" in incomplete_sections
+    resources_incomparable = "resources" in incomplete_sections
+    templates_incomparable = "resourceTemplates" in incomplete_sections
+    prompts_incomparable = "prompts" in incomplete_sections
+    manifest_incomparable = "manifest" in incomplete_sections
+
+    if not identity_comparable:
+        lines.append("  Complete-surface identity comparison: unavailable")
+        lines.append("")
+
+        def _format_limitations(raw: list[object]) -> list[str]:
+            # Drop the redundant structured limitation; we already render the identity-unavailable line above.
+            lims = [l for l in raw if isinstance(l, dict) and l.get("type") != "identity_unavailable"]
+            if not lims:
+                return []
+
+            def side_label(side: object) -> str:
+                return "Before" if side == "before" else ("After" if side == "after" else "Unknown")
+
+            def base_key(l: dict) -> tuple:
+                t = l.get("type")
+                if t == "coverage_incomplete":
+                    return (t, l.get("section"), l.get("reason"), l.get("side"))
+                if t == "legacy_format":
+                    return (t,)
+                if t == "evidence_gap":
+                    return (t, l.get("entityType"), l.get("path"), tuple(l.get("paths") or []), l.get("pathPattern"))
+                return (t, json.dumps(l, sort_keys=True, ensure_ascii=False))
+
+            grouped: dict[tuple, list[dict]] = {}
+            for l in lims:
+                grouped.setdefault(base_key(l), []).append(l)
+
+            out: list[str] = []
+            for k in sorted(grouped.keys(), key=lambda x: str(x)):
+                items = grouped[k]
+                t = items[0].get("type")
+                sides = sorted({i.get("side") for i in items if i.get("side") in ("before", "after")})
+
+                def with_sides(msg: str) -> str:
+                    if sides == ["before"]:
+                        return f"Before snapshot: {msg}"
+                    if sides == ["after"]:
+                        return f"After snapshot: {msg}"
+                    if sides == ["before", "after"]:
+                        return f"Both snapshots: {msg}"
+                    return msg
+
+                if t == "legacy_format":
+                    out.append(with_sides("uses the legacy report format; some evidence was not captured."))
+                    continue
+
+                if t == "coverage_incomplete":
+                    # Preserve side/section specificity; different failures shouldn't be collapsed.
+                    i = items[0]
+                    sec = i.get("section")
+                    reason = i.get("reason") or i.get("errorRule") or "incomplete"
+                    side = i.get("side")
+                    out.append(f"{side_label(side)} snapshot did not complete {sec} inspection ({reason}).")
+                    continue
+
+                if t == "evidence_gap":
+                    i = items[0]
+                    et = i.get("entityType")
+                    if et == "tool" and i.get("path") == "/inputSchema":
+                        out.append(with_sides("tool input schemas were not captured."))
+                        continue
+                    if et == "resource":
+                        out.append(with_sides("resource metadata were not captured."))
+                        continue
+                    if et == "resource_template":
+                        out.append(with_sides("resource-template metadata were not captured."))
+                        continue
+                    if et == "prompt":
+                        out.append(with_sides("prompt argument details beyond argument names were not captured."))
+                        continue
+
+                # Fallback to the existing message if present.
+                msg = items[0].get("message")
+                if isinstance(msg, str) and msg:
+                    out.append(msg)
+                else:
+                    out.append(json.dumps(items[0], ensure_ascii=False))
+
+            return out
+
+        formatted_limitations = _format_limitations(limitations)
+        if formatted_limitations:
+            lines.append("  Comparison limitations:")
+            for msg in formatted_limitations:
+                lines.append(f"    - {msg}")
+            lines.append("")
 
     def tool_map(surface: dict) -> dict[str, dict]:
         out: dict[str, dict] = {}
@@ -1847,137 +2339,212 @@ def diff_reports(before: dict, after: dict) -> str:
             out_lines.append(f"    ~ {p}: {json.dumps(x, ensure_ascii=False)[:160]} -> {json.dumps(y, ensure_ascii=False)[:160]}")
 
     # Tools
-    b_tools = tool_map(b_can)
-    a_tools = tool_map(a_can)
-    t_added = sorted(set(a_tools) - set(b_tools))
-    t_removed = sorted(set(b_tools) - set(a_tools))
-    t_common = sorted(set(b_tools) & set(a_tools))
-    tool_changes: list[str] = []
-    for name in t_common:
-        bt = b_tools[name]
-        at = a_tools[name]
-        if (bt.get("description") or "") != (at.get("description") or ""):
-            tool_changes.append(f"    ~ {name}.description")
-        if _canonical_json_bytes(bt.get("inputSchema")) != _canonical_json_bytes(at.get("inputSchema")):
-            tool_changes.append(f"    ~ {name}.inputSchema")
-
-    if t_added or t_removed or tool_changes:
-        lines.append("  Tools:")
-        for n in t_added:
-            lines.append(f"    + {n}")
-        for n in t_removed:
-            lines.append(f"    - {n}")
-        # Expand per-tool structural diffs for changed tools (bounded).
+    if not tools_incomparable:
+        b_tools = tool_map(b_can)
+        a_tools = tool_map(a_can)
+        t_added = sorted(set(a_tools) - set(b_tools))
+        t_removed = sorted(set(b_tools) - set(a_tools))
+        t_common = sorted(set(b_tools) & set(a_tools))
+        tool_changes: list[str] = []
         for name in t_common:
             bt = b_tools[name]
             at = a_tools[name]
             if (bt.get("description") or "") != (at.get("description") or ""):
-                lines.append(f"    ~ {name}.description: {json.dumps(bt.get('description'), ensure_ascii=False)} -> {json.dumps(at.get('description'), ensure_ascii=False)}")
-            b_schema = bt.get("inputSchema")
-            a_schema = at.get("inputSchema")
-            if _canonical_json_bytes(b_schema) != _canonical_json_bytes(a_schema):
-                lines.append(f"    ~ {name}.inputSchema:")
-                diff_values(f"{name}.inputSchema", b_schema, a_schema, lines, limit=25)
-        lines.append("")
+                tool_changes.append(f"    ~ {name}.description")
+            if not tool_schema_incomparable:
+                if _canonical_json_bytes(bt.get("inputSchema")) != _canonical_json_bytes(at.get("inputSchema")):
+                    tool_changes.append(f"    ~ {name}.inputSchema")
+
+        if t_added or t_removed or tool_changes:
+            lines.append("  Tools:")
+            for n in t_added:
+                lines.append(f"    + {n}")
+            for n in t_removed:
+                lines.append(f"    - {n}")
+            # Expand per-tool structural diffs for changed tools (bounded).
+            for name in t_common:
+                bt = b_tools[name]
+                at = a_tools[name]
+                if (bt.get("description") or "") != (at.get("description") or ""):
+                    lines.append(f"    ~ {name}.description: {json.dumps(bt.get('description'), ensure_ascii=False)} -> {json.dumps(at.get('description'), ensure_ascii=False)}")
+                if not tool_schema_incomparable:
+                    b_schema = bt.get("inputSchema")
+                    a_schema = at.get("inputSchema")
+                    if _canonical_json_bytes(b_schema) != _canonical_json_bytes(a_schema):
+                        lines.append(f"    ~ {name}.inputSchema:")
+                        diff_values(f"{name}.inputSchema", b_schema, a_schema, lines, limit=25)
+            lines.append("")
 
     # Resources / templates
-    b_res = map_by(b_can.get("resources") or [], "uri")
-    a_res = map_by(a_can.get("resources") or [], "uri")
-    b_tmpl = map_by(b_can.get("resourceTemplates") or [], "uriTemplate")
-    a_tmpl = map_by(a_can.get("resourceTemplates") or [], "uriTemplate")
-    res_added = sorted(set(a_res) - set(b_res))
-    res_removed = sorted(set(b_res) - set(a_res))
-    res_common = sorted(set(b_res) & set(a_res))
-    res_changed = [u for u in res_common if b_res[u] != a_res[u]]
-    tmpl_added = sorted(set(a_tmpl) - set(b_tmpl))
-    tmpl_removed = sorted(set(b_tmpl) - set(a_tmpl))
-    tmpl_common = sorted(set(b_tmpl) & set(a_tmpl))
-    tmpl_changed = [u for u in tmpl_common if b_tmpl[u] != a_tmpl[u]]
-    if res_added or res_removed or res_changed or tmpl_added or tmpl_removed or tmpl_changed:
-        lines.append("  Resources:")
-        for u in res_added:
-            lines.append(f"    + {u}")
-        for u in res_removed:
-            lines.append(f"    - {u}")
-        for u in res_changed:
-            lines.append(f"    ~ {u}")
-        for u in tmpl_added:
-            lines.append(f"    + {u}")
-        for u in tmpl_removed:
-            lines.append(f"    - {u}")
-        for u in tmpl_changed:
-            lines.append(f"    ~ {u}")
-        lines.append("")
+    if not resources_incomparable and not templates_incomparable:
+        b_res = map_by(b_can.get("resources") or [], "uri")
+        a_res = map_by(a_can.get("resources") or [], "uri")
+        b_tmpl = map_by(b_can.get("resourceTemplates") or [], "uriTemplate")
+        a_tmpl = map_by(a_can.get("resourceTemplates") or [], "uriTemplate")
+        res_added = sorted(set(a_res) - set(b_res))
+        res_removed = sorted(set(b_res) - set(a_res))
+        res_common = sorted(set(b_res) & set(a_res))
+        if resource_meta_incomparable:
+            res_changed = []
+        else:
+            res_changed = [u for u in res_common if b_res[u] != a_res[u]]
+        tmpl_added = sorted(set(a_tmpl) - set(b_tmpl))
+        tmpl_removed = sorted(set(b_tmpl) - set(a_tmpl))
+        tmpl_common = sorted(set(b_tmpl) & set(a_tmpl))
+        if template_meta_incomparable:
+            tmpl_changed = []
+        else:
+            tmpl_changed = [u for u in tmpl_common if b_tmpl[u] != a_tmpl[u]]
+        if res_added or res_removed or res_changed or tmpl_added or tmpl_removed or tmpl_changed:
+            lines.append("  Resources:")
+            for u in res_added:
+                lines.append(f"    + {u}")
+            for u in res_removed:
+                lines.append(f"    - {u}")
+            for u in res_changed:
+                lines.append(f"    ~ {u}")
+            for u in tmpl_added:
+                lines.append(f"    + {u}")
+            for u in tmpl_removed:
+                lines.append(f"    - {u}")
+            for u in tmpl_changed:
+                lines.append(f"    ~ {u}")
+            lines.append("")
 
     # Prompts
-    b_prompts = prompt_map(b_can)
-    a_prompts = prompt_map(a_can)
-    p_added = sorted(set(a_prompts) - set(b_prompts))
-    p_removed = sorted(set(b_prompts) - set(a_prompts))
-    p_common = sorted(set(b_prompts) & set(a_prompts))
-    p_changed: list[str] = []
-    for name in p_common:
-        bp = b_prompts[name]
-        ap = a_prompts[name]
-        if bp != ap:
-            p_changed.append(name)
-    if p_added or p_removed or p_changed:
-        lines.append("  Prompts:")
-        for n in p_added:
-            lines.append(f"    + {n}")
-        for n in p_removed:
-            lines.append(f"    - {n}")
-        for n in p_changed:
-            lines.append(f"    ~ {n}")
-        lines.append("")
+    if not prompts_incomparable:
+        b_prompts = prompt_map(b_can)
+        a_prompts = prompt_map(a_can)
+        p_added = sorted(set(a_prompts) - set(b_prompts))
+        p_removed = sorted(set(b_prompts) - set(a_prompts))
+        p_common = sorted(set(b_prompts) & set(a_prompts))
+        p_changed: list[str] = []
+        p_desc_changed: dict[str, tuple[Any, Any]] = {}
+        p_args_changed: dict[str, tuple[list[str], list[str]]] = {}
+        for name in p_common:
+            bp = b_prompts[name]
+            ap = a_prompts[name]
+            if prompt_arg_details_incomparable:
+                b_args = sorted([a.get("name") for a in (bp.get("arguments") or []) if isinstance(a, dict) and a.get("name")])
+                a_args = sorted([a.get("name") for a in (ap.get("arguments") or []) if isinstance(a, dict) and a.get("name")])
+                if bp.get("description") != ap.get("description"):
+                    p_desc_changed[name] = (bp.get("description"), ap.get("description"))
+                if b_args != a_args:
+                    added = sorted(set(a_args) - set(b_args))
+                    removed = sorted(set(b_args) - set(a_args))
+                    p_args_changed[name] = (added, removed)
+                if (bp.get("description") != ap.get("description")) or (b_args != a_args):
+                    p_changed.append(name)
+            else:
+                if bp != ap:
+                    if bp.get("description") != ap.get("description"):
+                        p_desc_changed[name] = (bp.get("description"), ap.get("description"))
+                    b_args = sorted([a.get("name") for a in (bp.get("arguments") or []) if isinstance(a, dict) and a.get("name")])
+                    a_args = sorted([a.get("name") for a in (ap.get("arguments") or []) if isinstance(a, dict) and a.get("name")])
+                    if b_args != a_args:
+                        added = sorted(set(a_args) - set(b_args))
+                        removed = sorted(set(b_args) - set(a_args))
+                        p_args_changed[name] = (added, removed)
+                    p_changed.append(name)
+        if p_added or p_removed or p_changed:
+            lines.append("  Prompts:")
+            for n in p_added:
+                lines.append(f"    + {n}")
+            for n in p_removed:
+                lines.append(f"    - {n}")
+            for n in p_changed:
+                rendered_any_detail = False
+                if n in p_desc_changed:
+                    before_desc, after_desc = p_desc_changed[n]
+                    lines.append(f"    ~ {n}.description:")
+                    lines.append(
+                        f"        {json.dumps(before_desc, ensure_ascii=False)} -> {json.dumps(after_desc, ensure_ascii=False)}"
+                    )
+                    rendered_any_detail = True
+                if n in p_args_changed:
+                    added, removed = p_args_changed[n]
+                    lines.append(f"    ~ {n}.arguments:")
+                    if added:
+                        lines.append(f"        added: {', '.join(added)}")
+                    if removed:
+                        lines.append(f"        removed: {', '.join(removed)}")
+                    rendered_any_detail = True
+                if not rendered_any_detail:
+                    lines.append(f"    ~ {n}")
+            lines.append("")
 
     # Manifest / action-level capability diff (from declarationSources).
-    before_caps = _manifest_tool_caps_entry_map_from_surface(b_can)
-    after_caps = _manifest_tool_caps_entry_map_from_surface(a_can)
-    caps_added = sorted(set(after_caps) - set(before_caps))
-    caps_removed = sorted(set(before_caps) - set(after_caps))
-    caps_changed: list[tuple[str, list[str], list[str]]] = []
-    for name in sorted(set(before_caps) & set(after_caps)):
-        be = before_caps.get(name) or {}
-        ae = after_caps.get(name) or {}
-        b_ops_raw = be.get("operations") or []
-        a_ops_raw = ae.get("operations") or []
-        try:
-            b_ops = set(b_ops_raw)
-            a_ops = set(a_ops_raw)
-        except TypeError:
-            # If operations aren't hashable, fall back to whole-list comparison.
-            if b_ops_raw != a_ops_raw:
-                caps_changed.append((name, [], []))
-            continue
-        # If any identity-bearing manifest metadata changed, treat as a manifest change.
-        if be != ae:
-            ops_added = sorted(a_ops - b_ops)
-            ops_removed = sorted(b_ops - a_ops)
-            caps_changed.append((name, ops_added, ops_removed))
+    if not manifest_incomparable:
+        before_caps = _manifest_tool_caps_entry_map_from_surface(b_can)
+        after_caps = _manifest_tool_caps_entry_map_from_surface(a_can)
+        caps_added = sorted(set(after_caps) - set(before_caps))
+        caps_removed = sorted(set(before_caps) - set(after_caps))
+        caps_changed: list[tuple[str, list[str], list[str]]] = []
+        for name in sorted(set(before_caps) & set(after_caps)):
+            be = before_caps.get(name) or {}
+            ae = after_caps.get(name) or {}
+            b_ops_raw = be.get("operations") or []
+            a_ops_raw = ae.get("operations") or []
+            try:
+                b_ops = set(b_ops_raw)
+                a_ops = set(a_ops_raw)
+            except TypeError:
+                # If operations aren't hashable, fall back to whole-list comparison.
+                if b_ops_raw != a_ops_raw:
+                    caps_changed.append((name, [], []))
+                continue
+            # If any identity-bearing manifest metadata changed, treat as a manifest change.
+            if be != ae:
+                ops_added = sorted(a_ops - b_ops)
+                ops_removed = sorted(b_ops - a_ops)
+                caps_changed.append((name, ops_added, ops_removed))
 
-    has_caps_diff = caps_added or caps_removed or caps_changed
-    if has_caps_diff:
-        lines.append("  Capabilities (manifest-declared):")
-        for name in caps_added:
-            ops = (after_caps.get(name) or {}).get("operations")
-            count = f" ({len(ops)} operations)" if ops else ""
-            lines.append(f"    + {name}{count}")
-        for name in caps_removed:
-            ops = (before_caps.get(name) or {}).get("operations")
-            count = f" ({len(ops)} operations)" if ops else ""
-            lines.append(f"    - {name}{count}")
-        for name, ops_added_list, ops_removed_list in caps_changed:
-            b_count = len(((before_caps.get(name) or {}).get("operations") or []))
-            a_count = len(((after_caps.get(name) or {}).get("operations") or []))
-            parts = []
-            if ops_added_list:
-                parts.append(f"added: {', '.join(ops_added_list)}")
-            if ops_removed_list:
-                parts.append(f"removed: {', '.join(ops_removed_list)}")
-            detail = f" ({'; '.join(parts)})" if parts else ""
-            lines.append(f"    ~ {name}: {b_count} operations -> {a_count} operations{detail}")
-        lines.append("")
+        has_caps_diff = caps_added or caps_removed or caps_changed
+        if has_caps_diff:
+            lines.append("  Capabilities (manifest-declared):")
+            for name in caps_added:
+                ops = (after_caps.get(name) or {}).get("operations")
+                count = f" ({len(ops)} operations)" if ops else ""
+                lines.append(f"    + {name}{count}")
+            for name in caps_removed:
+                ops = (before_caps.get(name) or {}).get("operations")
+                count = f" ({len(ops)} operations)" if ops else ""
+                lines.append(f"    - {name}{count}")
+            for name, ops_added_list, ops_removed_list in caps_changed:
+                b_count = len(((before_caps.get(name) or {}).get("operations") or []))
+                a_count = len(((after_caps.get(name) or {}).get("operations") or []))
+                parts = []
+                if ops_added_list:
+                    parts.append(f"added: {', '.join(ops_added_list)}")
+                if ops_removed_list:
+                    parts.append(f"removed: {', '.join(ops_removed_list)}")
+                detail = f" ({'; '.join(parts)})" if parts else ""
+                lines.append(f"    ~ {name}: {b_count} operations -> {a_count} operations{detail}")
+            lines.append("")
+
+    if evidence_changes:
+        newly_obs = [e for e in evidence_changes if isinstance(e, dict) and e.get("type") == "field_became_observable"]
+        newly_unobs = [e for e in evidence_changes if isinstance(e, dict) and e.get("type") == "field_became_unobservable"]
+        if newly_obs:
+            lines.append("  Newly observable:")
+            for e in newly_obs:
+                ent = e.get("entityId")
+                path = e.get("path")
+                if isinstance(ent, str) and path == "/inputSchema":
+                    lines.append(f"    ? {ent}.inputSchema")
+                else:
+                    lines.append(f"    ? {json.dumps(e, ensure_ascii=False)}")
+            lines.append("")
+        if newly_unobs:
+            lines.append("  Newly unobservable:")
+            for e in newly_unobs:
+                ent = e.get("entityId")
+                path = e.get("path")
+                if isinstance(ent, str) and path == "/inputSchema":
+                    lines.append(f"    ? {ent}.inputSchema")
+                else:
+                    lines.append(f"    ? {json.dumps(e, ensure_ascii=False)}")
+            lines.append("")
 
     if len(lines) <= 5 or lines[-1] != "":
         # Ensure trailing newline and a clean end.
@@ -1986,7 +2553,10 @@ def diff_reports(before: dict, after: dict) -> str:
     # If nothing changed beyond header.
     has_change_sections = any(h in lines for h in ("  Tools:", "  Resources:", "  Prompts:", "  Capabilities (manifest-declared):"))
     if not has_change_sections:
-        lines.append("  No changes detected.\n")
+        if identity_comparable:
+            lines.append("  No changes detected.\n")
+        else:
+            lines.append("  No proven changes detected in comparable fields.\n")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -2196,19 +2766,33 @@ def main() -> None:
         parser.add_argument("after", type=Path)
         ns = parser.parse_args(sys.argv[2:])
 
-        before = json.loads(ns.before.read_text(encoding="utf-8"))
-        after = json.loads(ns.after.read_text(encoding="utf-8"))
-        sys.stdout.write(diff_reports(before, after))
+        try:
+            before = json.loads(ns.before.read_text(encoding="utf-8"))
+            after = json.loads(ns.after.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"mcp-preflight diff: error: invalid JSON ({e})\n")
+            raise SystemExit(2)
+
+        try:
+            sys.stdout.write(diff_reports(before, after))
+        except ValueError as e:
+            # User-facing failures (unsupported snapshot format/version, etc.) should not print a traceback.
+            sys.stderr.write(f"mcp-preflight diff: error: {e}\n")
+            raise SystemExit(2)
         return
 
     parser = argparse.ArgumentParser(
         prog="mcp-preflight",
         add_help=True,
-        description="Inspect an MCP server's exposed capabilities (tools/resources/prompts).",
-        epilog="Note: this runs the server process locally; it does not sandbox the server.",
+        description="Inspect, fingerprint, and diff an MCP server’s exposed capabilities.",
+        epilog=(
+            "Note: this starts the server process locally and does not sandbox it. "
+            "Preflight does not invoke declared tools."
+        ),
     )
-    parser.add_argument("--json", action="store_true", dest="as_json", help="Print machine-readable JSON")
-    parser.add_argument("--save", type=Path, help="Save JSON report to a file")
+    parser.add_argument("--version", action="version", version=f"mcp-preflight {__version__}")
+    parser.add_argument("--json", action="store_true", dest="as_json", help="Print the versioned snapshot as JSON")
+    parser.add_argument("--save", type=Path, help="Save the versioned snapshot to a file")
     parser.add_argument("--timeout", type=float, default=10.0, help="Timeout (seconds) for MCP calls (default: 10)")
     parser.add_argument("--no-signals", action="store_true", help="Disable heuristic signal scanning/output")
     parser.add_argument(
@@ -2304,6 +2888,15 @@ def main() -> None:
             pass
 
     _emit_report(report, save_path=ns.save, as_json=ns.as_json)
+    # For workflow/CI usage: emit a nonzero exit code for non-ok observations, while still
+    # producing a snapshot JSON on stdout/--save.
+    obs_status = None
+    if isinstance(report, dict):
+        obs = report.get("observation")
+        if isinstance(obs, dict):
+            obs_status = obs.get("status")
+    if str(obs_status or "") != "ok":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

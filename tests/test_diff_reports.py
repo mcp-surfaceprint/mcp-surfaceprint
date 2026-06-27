@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp_preflight import diff_reports
+from mcp_preflight import _compute_snapshot_comparison, diff_reports
 
 
 def _snapshot(
@@ -254,4 +254,308 @@ def test_diff_unchanged_manifest_shows_no_capabilities_section() -> None:
     after = _snapshot(manifest_caps=manifest)
     diff = diff_reports(before, after)
     assert "Capabilities (manifest-declared):" not in diff
+
+
+def _legacy_report(
+    *,
+    server_name: str = "toy-open",
+    protocol_version: str = "2025-11-25",
+    tools: list[dict] | None = None,
+    resources: list[str] | None = None,
+    templates: list[str] | None = None,
+    prompts: list[dict] | None = None,
+) -> dict:
+    return {
+        "generatedAt": "2026-01-01T00:00:00Z",
+        "scannedCommand": ["python", "tests/toy_servers/toy_open.py"],
+        "server": {"name": server_name, "protocolVersion": protocol_version},
+        "capabilities": {"tools": True, "resources": True, "prompts": True},
+        "status": "ok",
+        "tools": tools or [],
+        "resources": resources or [],
+        "resourceTemplates": templates or [],
+        "prompts": prompts or [],
+        "risk": {"read": 0, "write": 0, "destructive": 0},
+        "signals": [],
+        "notes": [],
+        "errors": [],
+    }
+
+
+def test_legacy_schema_gap_is_rendered_as_evidence_change_not_null_to_schema() -> None:
+    legacy = _legacy_report(
+        tools=[
+            {"name": "t1", "description": "one"},
+            {"name": "t2", "description": "two"},
+        ],
+        resources=["toy://items"],
+        templates=["toy://items/{item_id}"],
+        prompts=[{"name": "analyze_items", "description": "Analyze items", "arguments": ["project_name"]}],
+    )
+    current = _snapshot(
+        server_name="toy-open",
+        tools=[
+            {"name": "t1", "description": "one", "inputSchema": {"type": "object", "properties": {"a": {"type": "string"}}}},
+            {"name": "t2", "description": "two", "inputSchema": {"type": "object"}},
+        ],
+        resources=[{"uri": "toy://items"}],
+        templates=[{"uriTemplate": "toy://items/{item_id}"}],
+        prompts=[{"name": "analyze_items", "description": "Analyze items", "arguments": [{"name": "project_name"}]}],
+        surface_digest="sha256:" + "a" * 64,
+    )
+
+    text = diff_reports(legacy, current)
+    assert "WARNING: Legacy report:" in text
+    assert "Complete-surface identity comparison: unavailable" in text
+    assert "Comparison limitations:" in text
+    assert "Newly observable:" in text
+    assert "? t1.inputSchema" in text
+    assert "? t2.inputSchema" in text
+    assert "null ->" not in text
+    assert "~ t1.inputSchema" not in text
+    assert "~ t2.inputSchema" not in text
+    assert "Resources:" not in text
+    assert "Prompts:" not in text
+    assert "No changes detected." not in text
+    assert "No proven changes detected in comparable fields." in text
+    # No redundant "identity unavailable" limitation.
+    assert "Complete-surface identity comparison is unavailable" not in text
+    # No outdated digest note wording.
+    assert "surfaceDigest is omitted unless both surfaces are complete" not in text
+
+
+def test_legacy_comparable_fields_still_diff_normally() -> None:
+    legacy = _legacy_report(
+        tools=[
+            {"name": "t1", "description": "one"},
+        ],
+        resources=[],
+        templates=[],
+        prompts=[],
+    )
+    current = _snapshot(
+        server_name="toy-open",
+        tools=[
+            {"name": "t1", "description": "ONE", "inputSchema": {"type": "object"}},
+        ],
+        resources=[],
+        templates=[],
+        prompts=[],
+        surface_digest="sha256:" + "a" * 64,
+    )
+
+    text = diff_reports(legacy, current)
+    assert "Tools:" in text
+    assert "~ t1.description:" in text
+    assert "~ t1.inputSchema" not in text
+    assert "Newly observable:" in text
+
+
+def test_compute_snapshot_comparison_emits_field_became_observable_for_legacy_schema_gap() -> None:
+    before = _snapshot(
+        tools=[
+            {"name": "t1", "description": "one", "inputSchema": None},
+            {"name": "t2", "description": "two", "inputSchema": None},
+        ],
+        resources=[],
+        templates=[],
+        prompts=[],
+        surface_digest="sha256:" + "0" * 64,
+    )
+    before["surfaceCompleteness"] = "partial"
+    before.pop("surfaceDigest", None)
+    before_obs = before.get("observation")
+    assert isinstance(before_obs, dict)
+    before_obs["comparisonMetadata"] = {
+        "legacy": True,
+        "evidenceGaps": [{"type": "field_not_captured", "entityType": "tool", "path": "/inputSchema", "reason": "legacy_format_not_captured"}],
+    }
+
+    after = _snapshot(
+        tools=[
+            {"name": "t1", "description": "one", "inputSchema": {"type": "object"}},
+            {"name": "t2", "description": "two", "inputSchema": {"type": "object"}},
+        ],
+        resources=[],
+        templates=[],
+        prompts=[],
+        surface_digest="sha256:" + "a" * 64,
+    )
+
+    comp = _compute_snapshot_comparison(before, after)
+    assert comp["identityComparable"] is False
+    ev = comp["evidenceChanges"]
+    assert any(e.get("type") == "field_became_observable" and e.get("entityId") == "t1" and e.get("path") == "/inputSchema" for e in ev)
+    assert any(e.get("type") == "field_became_observable" and e.get("entityId") == "t2" and e.get("path") == "/inputSchema" for e in ev)
+
+
+def test_generic_partial_resources_does_not_render_resource_add_remove() -> None:
+    # Before: partial due to resources timeout (resources are unknown, not empty).
+    before = _snapshot(
+        tools=[{"name": "t1", "description": "one", "inputSchema": {"type": "object"}}],
+        resources=[],
+        templates=[],
+        prompts=[],
+        surface_digest="sha256:" + "0" * 64,
+    )
+    before["surfaceCompleteness"] = "partial"
+    before.pop("surfaceDigest", None)
+    before_obs = before["observation"]
+    before_obs["coverage"] = {
+        "tools": {"attempted": True, "completed": True, "declaredSupported": True, "itemCount": 1},
+        "resources": {"attempted": True, "completed": False, "declaredSupported": True, "errorRule": "timeout"},
+        "resourceTemplates": {"attempted": True, "completed": True, "declaredSupported": True, "itemCount": 0},
+        "prompts": {"attempted": True, "completed": True, "declaredSupported": True, "itemCount": 0},
+        "manifest": {"attempted": False, "completed": False, "declaredSupported": None},
+    }
+
+    after = _snapshot(
+        tools=[{"name": "t1", "description": "one", "inputSchema": {"type": "object"}}],
+        resources=[{"uri": "toy://items"}],
+        templates=[{"uriTemplate": "toy://items/{id}"}],
+        prompts=[],
+        surface_digest="sha256:" + "a" * 64,
+    )
+
+    text = diff_reports(before, after)
+    assert "Comparison limitations:" in text
+    assert "did not complete resources inspection (timeout)" in text
+    assert "Resources:" not in text
+    assert "+ toy://items" not in text
+    assert "- toy://items" not in text
+    assert "Newly observable:" not in text
+
+
+def test_legacy_resource_uri_addition_is_still_proven() -> None:
+    legacy = _legacy_report(
+        tools=[{"name": "t1", "description": "one"}],
+        resources=["toy://a"],
+        templates=[],
+        prompts=[],
+    )
+    current = _snapshot(
+        tools=[{"name": "t1", "description": "one", "inputSchema": {"type": "object"}}],
+        resources=[{"uri": "toy://a", "description": "desc"}, {"uri": "toy://b", "description": "desc"}],
+        templates=[],
+        prompts=[],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    text = diff_reports(legacy, current)
+    assert "Resources:" in text
+    assert "+ toy://b" in text
+    assert "~ toy://a" not in text
+
+
+def test_legacy_prompt_argument_name_addition_is_still_proven_prompt_change() -> None:
+    legacy = _legacy_report(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "D", "arguments": ["a"]}],
+    )
+    current = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[
+            {
+                "name": "p",
+                "description": "D",
+                "arguments": [{"name": "a", "required": True}, {"name": "b", "required": True}],
+            }
+        ],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    text = diff_reports(legacy, current)
+    assert "Prompts:" in text
+    assert "~ p.arguments:" in text
+    assert "added: b" in text
+
+
+def test_prompt_description_change_renders_detail() -> None:
+    before = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "Analyze items", "arguments": [{"name": "project_name"}]}],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    after = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "Analyze items for a project", "arguments": [{"name": "project_name"}]}],
+        surface_digest="sha256:" + "b" * 64,
+    )
+    text = diff_reports(before, after)
+    assert "Prompts:" in text
+    assert "~ p.description:" in text
+    assert "\"Analyze items\" -> \"Analyze items for a project\"" in text
+
+
+def test_prompt_argument_name_added_and_removed_renders_detail() -> None:
+    before = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "D", "arguments": [{"name": "project_name"}]}],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    after = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "D", "arguments": [{"name": "language"}]}],
+        surface_digest="sha256:" + "b" * 64,
+    )
+    text = diff_reports(before, after)
+    assert "Prompts:" in text
+    assert "~ p.arguments:" in text
+    assert "added: language" in text
+    assert "removed: project_name" in text
+
+
+def test_snapshot_comparison_filters_only_prompt_argument_details_not_argument_names() -> None:
+    # Before has legacy evidence gap for prompt arg details.
+    before = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[{"name": "p", "description": "D", "arguments": [{"name": "a"}]}],
+        surface_digest="sha256:" + "0" * 64,
+    )
+    before["surfaceCompleteness"] = "partial"
+    before.pop("surfaceDigest", None)
+    before["observation"]["comparisonMetadata"] = {
+        "legacy": True,
+        "evidenceGaps": [
+            {
+                "type": "fields_not_captured",
+                "entityType": "prompt",
+                "pathPattern": r"^/arguments/[^/]+/(description|required|schema)$",
+                "reason": "legacy_format_argument_details_not_captured",
+            }
+        ],
+    }
+
+    after = _snapshot(
+        tools=[],
+        resources=[],
+        templates=[],
+        prompts=[
+            {
+                "name": "p",
+                "description": "D",
+                "arguments": [{"name": "a", "required": True}, {"name": "b", "required": True}],
+            }
+        ],
+        surface_digest="sha256:" + "a" * 64,
+    )
+
+    comp = _compute_snapshot_comparison(before, after)
+    paths = [c.get("path") for c in comp["changes"] if c.get("entityType") == "prompt"]
+    # Arg-name addition should remain (value_added at /arguments/b).
+    assert "/arguments/b" in paths
+    # Nested details should be filtered (no /arguments/<arg>/required, etc.)
+    assert not any(isinstance(p, str) and p.endswith("/required") for p in paths)
 

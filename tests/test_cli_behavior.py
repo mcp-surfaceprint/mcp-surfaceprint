@@ -121,3 +121,71 @@ def test_cli_diff_subcommand_prints_diff() -> None:
         assert "Diff" in proc.stdout
         assert "+ t" in proc.stdout
 
+
+def test_cli_version_flag_prints_version() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "mcp_preflight", "--version"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip().startswith("mcp-preflight ")
+
+
+def test_cli_diff_rejects_unsupported_snapshot_version_without_traceback() -> None:
+    before = {
+        "snapshotFormatVersion": "999",
+        "surfaceCompleteness": "complete",
+        "surface": {"tools": [], "resources": [], "resourceTemplates": [], "prompts": [], "declarationSources": []},
+        "surfaceDigest": "sha256:" + "0" * 64,
+        "surfaceEntityDigests": {"tools": {}, "prompts": {}, "resources": {}, "resourceTemplates": {}},
+        "observation": {
+            "generatedAt": "2026-01-01T00:00:00Z",
+            "protocolVersion": "x",
+            "serverName": "s",
+            "command": [],
+            "status": "ok",
+            "capabilities": {"tools": True, "resources": False, "prompts": False},
+            "coverage": {},
+            "notes": [],
+            "errors": [],
+            "localAnnotations": {"tools": [], "risk": {}, "signals": []},
+        },
+    }
+    after = {
+        "snapshotFormatVersion": "1",
+        "surfaceCompleteness": "complete",
+        "surface": {"tools": [], "resources": [], "resourceTemplates": [], "prompts": [], "declarationSources": []},
+        "surfaceDigest": "sha256:" + "0" * 64,
+        "surfaceEntityDigests": {"tools": {}, "prompts": {}, "resources": {}, "resourceTemplates": {}},
+        "observation": {
+            "generatedAt": "2026-01-01T00:00:00Z",
+            "protocolVersion": "x",
+            "serverName": "s",
+            "command": [],
+            "status": "ok",
+            "capabilities": {"tools": True, "resources": False, "prompts": False},
+            "coverage": {},
+            "notes": [],
+            "errors": [],
+            "localAnnotations": {"tools": [], "risk": {}, "signals": []},
+        },
+    }
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "before.json"
+        a = Path(td) / "after.json"
+        b.write_text(json.dumps(before), encoding="utf-8")
+        a.write_text(json.dumps(after), encoding="utf-8")
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "mcp_preflight", "diff", str(b), str(a)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.returncode != 0
+        combined = proc.stdout + proc.stderr
+        assert "Unsupported snapshotFormatVersion: 999" in combined
+        assert "Traceback" not in combined
+

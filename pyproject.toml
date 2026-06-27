@@ -35,6 +35,11 @@ test = [
     "pytest>=8.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/jordanstarrk/mcp-preflight"
 Repository = "https://github.com/jordanstarrk/mcp-preflight"
