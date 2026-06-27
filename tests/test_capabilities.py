@@ -336,3 +336,20 @@ def test_toy_open_has_no_manifest_key() -> None:
     """Servers without a ://mcp/manifest resource should not have the key."""
     snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_open.py")])
     assert snap["surface"]["declarationSources"] == []
+
+
+def test_toy_manifest_duplicate_operations_marks_partial_and_omits_digest() -> None:
+    """Malformed manifests should produce partial snapshots without a surfaceDigest."""
+    snap = parse_preflight_json([sys.executable, str(TOY_DIR / "toy_manifest_dupe_ops.py")])
+    assert snap["observation"]["serverName"] == "toy-manifest-dupe-ops"
+    assert snap["surfaceCompleteness"] == "partial"
+    assert "surfaceDigest" not in snap
+
+    manifest_cov = snap["observation"]["coverage"]["manifest"]
+    assert manifest_cov["completed"] is False
+    assert manifest_cov["errorRule"] == "duplicate_operations"
+
+    assert any(
+        (n.get("kind") == "declaration_source" and n.get("name") == "mcp_manifest" and n.get("rule") == "duplicate_operations")
+        for n in (snap["observation"].get("notes") or [])
+    )

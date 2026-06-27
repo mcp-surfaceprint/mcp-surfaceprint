@@ -62,6 +62,21 @@ def test_conformance_changes_manifest_operation_added() -> None:
         assert any(_record_matches_subset(c, exp) for c in changes)
 
 
+def test_conformance_changes_manifest_description_changed() -> None:
+    fx = _load_json(FIXTURES_DIR / "changes" / "manifest_description_changed.json")
+    before = fx["before"]
+    after = fx["after"]
+
+    assert _compute_surface_digest(before) != _compute_surface_digest(after)
+
+    changes = _compute_surface_changes(before, after)
+    assert changes
+
+    expected = fx["expectedRecords"]
+    for exp in expected:
+        assert any(_record_matches_subset(c, exp) for c in changes)
+
+
 def test_conformance_changes_resource_description_changed() -> None:
     fx = _load_json(FIXTURES_DIR / "changes" / "resource_description_changed.json")
     before = fx["before"]
@@ -92,6 +107,21 @@ def test_conformance_changes_tool_schema_enum_expanded() -> None:
         assert any(_record_matches_subset(c, exp) for c in changes)
 
 
+def test_conformance_changes_prompt_argument_required_changed() -> None:
+    fx = _load_json(FIXTURES_DIR / "changes" / "prompt_argument_required_changed.json")
+    before = fx["before"]
+    after = fx["after"]
+
+    assert _compute_surface_digest(before) != _compute_surface_digest(after)
+
+    changes = _compute_surface_changes(before, after)
+    assert changes
+
+    expected = fx["expectedRecords"]
+    for exp in expected:
+        assert any(_record_matches_subset(c, exp) for c in changes)
+
+
 def test_digest_diff_equivalence_invariant_for_complete_surfaces() -> None:
     """
     Release-blocking invariant for complete surfaces:
@@ -103,7 +133,13 @@ def test_digest_diff_equivalence_invariant_for_complete_surfaces() -> None:
     pairs = [
         (equiv["a"], equiv["b"]),
     ]
-    for name in ("manifest_operation_added", "resource_description_changed", "tool_schema_enum_expanded"):
+    for name in (
+        "manifest_operation_added",
+        "manifest_description_changed",
+        "prompt_argument_required_changed",
+        "resource_description_changed",
+        "tool_schema_enum_expanded",
+    ):
         fx = _load_json(FIXTURES_DIR / "changes" / f"{name}.json")
         pairs.append((fx["before"], fx["after"]))
 

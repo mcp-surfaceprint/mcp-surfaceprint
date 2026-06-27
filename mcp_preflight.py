@@ -831,8 +831,8 @@ def _canonicalize_surface(surface: dict) -> dict:
 
         Contract:
         - toolCapabilities entries are sorted by `tool`
-        - `operations` is treated as an unordered set for identity, represented as a sorted list
-          (duplicates are preserved; duplicate values should be flagged separately as malformed)
+        - `operations` order is not identity-bearing; values are sorted deterministically.
+          Duplicate values are preserved for detection and should cause the observation to be partial.
         """
         if not isinstance(tool_caps, list):
             return _canonicalize_schema(tool_caps)
@@ -1243,6 +1243,8 @@ async def inspect(
                                         )
                                         coverage["manifest"]["completed"] = False
                                         coverage["manifest"]["errorRule"] = "duplicate_operations"
+                                        # Do not claim manifest completeness when malformed.
+                                        # (Even though we parsed it, we refuse to produce a stable identity.)
 
                                     declaration_sources.append(
                                         {
@@ -1261,7 +1263,8 @@ async def inspect(
                                             "snippet": raw_hash,
                                         }
                                     )
-                                    coverage["manifest"]["completed"] = True
+                                    if not dupes:
+                                        coverage["manifest"]["completed"] = True
                                 else:
                                     status = _mark_partial(status)
                                     notes.append(

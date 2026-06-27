@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from mcp_preflight import diff_reports
 
 
@@ -7,8 +10,8 @@ def _snapshot(
     *,
     server_name: str = "s",
     tools: list[dict] | None = None,
-    resources: list[str] | None = None,
-    templates: list[str] | None = None,
+    resources: list[object] | None = None,
+    templates: list[object] | None = None,
     prompts: list[dict] | None = None,
     manifest_caps: list[dict] | None = None,
     surface_digest: str = "sha256:" + "0" * 64,
@@ -44,10 +47,40 @@ def _snapshot(
         },
         "surface": {
             "tools": tools or [],
-            "resources": [{"uri": u} for u in (resources or [])],
-            "resourceTemplates": [{"uriTemplate": u} for u in (templates or [])],
+            "resources": [
+                (r if isinstance(r, dict) else {"uri": r})
+                for r in (resources or [])
+            ],
+            "resourceTemplates": [
+                (t if isinstance(t, dict) else {"uriTemplate": t})
+                for t in (templates or [])
+            ],
             "prompts": prompts or [],
             "declarationSources": decl_sources,
+        },
+    }
+
+
+def _wrap_surface_as_snapshot(surface: dict, *, server_name: str = "s") -> dict:
+    """Build a minimal complete snapshot object for diff_reports() tests."""
+    return {
+        "snapshotFormatVersion": "1",
+        "surfaceCompleteness": "complete",
+        "surface": surface,
+        # Placeholder surfaceDigest; tests that care about equality/inequality should supply real values.
+        "surfaceDigest": "sha256:" + "0" * 64,
+        "surfaceEntityDigests": {"tools": {}, "prompts": {}, "resources": {}, "resourceTemplates": {}},
+        "observation": {
+            "generatedAt": "x",
+            "protocolVersion": "x",
+            "serverName": server_name,
+            "command": [],
+            "status": "ok",
+            "capabilities": {"tools": True, "resources": True, "prompts": True},
+            "coverage": {},
+            "notes": [],
+            "errors": [],
+            "localAnnotations": {"tools": [], "risk": {}, "signals": []},
         },
     }
 
@@ -88,6 +121,70 @@ def test_diff_reports_detects_added_removed_and_metadata_changes() -> None:
     assert "Prompts:" in diff
     assert "+ p2" in diff
     assert "- p1" in diff
+
+
+def test_diff_reports_shows_resource_metadata_changes_as_tilde_lines() -> None:
+    before = _snapshot(
+        resources=[{"uri": "toy://r", "description": "desc"}],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    after = _snapshot(
+        resources=[{"uri": "toy://r", "description": "desc2"}],
+        surface_digest="sha256:" + "b" * 64,
+    )
+    diff = diff_reports(before, after)
+    assert "Resources:" in diff
+    assert "~ toy://r" in diff
+
+
+def test_diff_reports_shows_template_metadata_changes_as_tilde_lines() -> None:
+    before = _snapshot(
+        templates=[{"uriTemplate": "toy://t/{id}", "mimeType": "text/plain"}],
+        surface_digest="sha256:" + "a" * 64,
+    )
+    after = _snapshot(
+        templates=[{"uriTemplate": "toy://t/{id}", "mimeType": "application/json"}],
+        surface_digest="sha256:" + "b" * 64,
+    )
+    diff = diff_reports(before, after)
+    assert "Resources:" in diff
+    assert "~ toy://t/{id}" in diff
+
+
+def test_diff_reports_never_claims_no_changes_when_digests_differ() -> None:
+    """
+    CLI-layer parity: if complete snapshots have different digests, the human diff must
+    not say \"No changes detected.\".
+    """
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "conformance"
+    for path in sorted((fixtures / "changes").glob("*.json")):
+        fx = json.loads(path.read_text(encoding="utf-8"))
+        before_surface = fx["before"]
+        after_surface = fx["after"]
+
+        before = _wrap_surface_as_snapshot(before_surface)
+        after = _wrap_surface_as_snapshot(after_surface)
+        before["surfaceDigest"] = "sha256:" + "a" * 64
+        after["surfaceDigest"] = "sha256:" + "b" * 64
+
+        text = diff_reports(before, after)
+        assert "No changes detected" not in text, f"false negative for fixture {path.name}"
+
+
+def test_diff_reports_claims_no_changes_for_equivalence_fixtures() -> None:
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "conformance"
+    for path in sorted((fixtures / "equivalence").glob("*.json")):
+        fx = json.loads(path.read_text(encoding="utf-8"))
+        a_surface = fx["a"]
+        b_surface = fx["b"]
+
+        before = _wrap_surface_as_snapshot(a_surface)
+        after = _wrap_surface_as_snapshot(b_surface)
+        before["surfaceDigest"] = "sha256:" + "a" * 64
+        after["surfaceDigest"] = "sha256:" + "a" * 64
+
+        text = diff_reports(before, after)
+        assert "No changes detected." in text, f"expected no-changes for fixture {path.name}"
 
 
 # ── Manifest / capabilities diffing ─────────────────────────
