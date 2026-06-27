@@ -5,6 +5,15 @@
 `ls -la` for MCP servers. Inspect what a server declares before giving it operational access.
 `mcp-preflight` captures a server’s declared tools, schemas, resources, templates, prompts, and additional declared operations. It can save that surface as a deterministic snapshot, assign complete observations a stable SHA-256 identity, and show structural changes over time.
 
+## TL;DR
+
+- **Inspect**: show the client-visible MCP surface (tools, schemas, resources/templates, prompts).
+- **Snapshot**: `--save` / `--json` emit a versioned snapshot JSON you can commit.
+- **Fingerprint**: complete snapshots get a deterministic `surfaceDigest` (sha256 of the canonical surface).
+- **Diff**: `mcp-preflight diff` reports structural capability changes (not just tool-count changes).
+- **Evidence-aware comparisons**: legacy/partial inputs don’t support complete identity claims; limitations and evidence gaps are rendered explicitly.
+- **Manifest support**: can read `{scheme}://mcp/manifest` to surface multiplexed per-tool operations.
+
 
 
 ## Install
@@ -73,6 +82,23 @@ mcp-preflight diff before.json after.json
 mcp-preflight --json "uv run server.py"
 ```
 
+### CI-friendly usage (snapshot + diff)
+
+```bash
+# Create and commit a baseline snapshot (one-time)
+mcp-preflight --save mcp-surface.json "uv run server.py"
+git add mcp-surface.json
+
+# Later (e.g. after an upgrade): re-inspect and diff
+mcp-preflight --save mcp-surface-current.json "uv run server.py" || true
+mcp-preflight diff mcp-surface.json mcp-surface-current.json
+```
+
+Notes:
+
+- `mcp-preflight` exits **nonzero** when inspection is partial/failed, but it can still save a snapshot; `|| true` lets a CI job continue to run `diff`.
+- `mcp-preflight diff` currently prints a human diff and does not return “changed vs unchanged” via exit code.
+
 ## What changes can it detect?
 
 Snapshots can reveal changes that do not alter a tool name, including:
@@ -91,7 +117,7 @@ Snapshots can reveal changes that do not alter a tool name, including:
 
 ## Snapshot JSON format
 
-`--json` and `--save` emit a **versioned snapshot**. Note: v0.2 replaces the previous report JSON format with this versioned snapshot format.
+`--json` and `--save` emit a **versioned snapshot**. (Older `mcp-preflight` versions emitted an unversioned “report” JSON format; snapshots are the stable format going forward.)
 
 - **`observation`**: timestamp, command, negotiated protocol version, inspection status, coverage, notes, errors, and local heuristic annotations.
 - **`surface`**: the server-declared tools, descriptions, the complete `inputSchema` returned by the server, resources, resource templates, prompts, prompt arguments, and additional declaration sources.
@@ -114,6 +140,37 @@ Tool, resource, resource-template, and prompt descriptions participate in surfac
 `protocolVersion` is preserved in `observation` but does not participate in `surfaceDigest`.
 
 The digest identifies the normalized declaration observed when all identity-bearing inspection sections completed successfully. It does not verify that the server’s declaration is truthful, exhaustive, safe, or representative of runtime behavior.
+
+### Exit codes
+
+`mcp-preflight` is designed to be usable in CI. It returns a nonzero exit code when it cannot produce a complete, comparable surface identity.
+
+#### `mcp-preflight` (inspect)
+
+- **0**: inspection succeeded and `observation.status == "ok"` (a complete surface identity was emitted)
+- **1**: inspection was partial or failed (`observation.status != "ok"`) but a snapshot may still be written via `--save` and/or printed via `--json`
+
+Examples of non-`ok` statuses include: `partial`, `timeout`, `auth_gated`, `auth_required`, `startup_error`.
+
+#### `mcp-preflight diff`
+
+- **0**: diff completed successfully (regardless of whether changes were found)
+- **2**: user-facing error (for example, invalid JSON or unsupported snapshot format/version)
+
+`mcp-preflight diff` prints a human-readable diff. It does not currently signal “changed” vs “unchanged” via exit code; use the output text (or wait for `diff --json` / `check` workflow commands).
+
+### Legacy JSON reports
+
+`mcp-preflight diff` accepts older, unversioned legacy report JSON. Legacy reports are treated as **partial** and compared with explicit evidence/observability limitations:
+
+- Missing legacy evidence (for example, tool schemas not captured by the legacy format) is not rendered as a proven capability change.
+- Digest-based identity comparison is only available when both inputs are complete snapshots.
+
+When legacy/partial inputs are involved, diffs may include:
+
+- `Complete-surface identity comparison: unavailable`
+- `Comparison limitations: ...`
+- `Newly observable:` / `Newly unobservable:` (for fields that became observable due to improved snapshot evidence capture)
 
 <details>
 <summary>Auth-gated servers / custom env</summary>
