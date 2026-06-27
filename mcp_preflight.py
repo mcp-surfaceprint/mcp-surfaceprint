@@ -2781,6 +2781,162 @@ def main() -> None:
             raise SystemExit(2)
         return
 
+    if sys.argv[1] == "check":
+        parser = argparse.ArgumentParser(prog="mcp-preflight check", add_help=True)
+        parser.add_argument("--json", action="store_true", dest="as_json", help="Print the check result as JSON")
+        parser.add_argument("--save", type=Path, help="Save the live snapshot (current) to a file")
+        parser.add_argument("--timeout", type=float, default=10.0, help="Timeout (seconds) for MCP calls (default: 10)")
+        parser.add_argument("--no-signals", action="store_true", help="Disable heuristic signal scanning/output")
+        parser.add_argument(
+            "--env",
+            action="append",
+            default=[],
+            help="Add/override an environment variable for the server (repeatable, KEY=VALUE)",
+        )
+        parser.add_argument("--cwd", type=Path, help="Working directory for the server process")
+        parser.add_argument(
+            "--home",
+            type=Path,
+            help="Set HOME for the server (also sets XDG_* dirs); equivalent to --env HOME=... with extras",
+        )
+        parser.add_argument(
+            "--isolate-home",
+            action="store_true",
+            help="Run server with HOME (and XDG_* dirs) set to a temporary directory",
+        )
+        vgroup = parser.add_mutually_exclusive_group()
+        vgroup.add_argument("--quiet", action="store_true", help="Suppress server stderr (even on failure)")
+        vgroup.add_argument("--verbose", action="store_true", help="Print server stderr (even on success)")
+        parser.add_argument("baseline", type=Path, help="Baseline snapshot JSON (must be a complete versioned snapshot)")
+        parser.add_argument("command", nargs=argparse.REMAINDER, help="Server command (quoted or split)")
+        ns = parser.parse_args(sys.argv[2:])
+
+        # Load and validate baseline.
+        try:
+            baseline_raw = json.loads(ns.baseline.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"mcp-preflight check: error: invalid baseline JSON ({e})\n")
+            raise SystemExit(4)
+
+        if not (isinstance(baseline_raw, dict) and baseline_raw.get("snapshotFormatVersion")):
+            sys.stderr.write("mcp-preflight check: error: baseline must be a versioned snapshot (legacy reports are not supported)\n")
+            raise SystemExit(4)
+        ver = str(baseline_raw.get("snapshotFormatVersion"))
+        if ver != "1":
+            sys.stderr.write(f"mcp-preflight check: error: Unsupported snapshotFormatVersion: {ver}\n")
+            raise SystemExit(4)
+        if str(baseline_raw.get("surfaceCompleteness")) != "complete" or not baseline_raw.get("surfaceDigest"):
+            sys.stderr.write("mcp-preflight check: error: baseline must be a complete snapshot with surfaceDigest\n")
+            raise SystemExit(4)
+
+        if not ns.command:
+            sys.stderr.write("mcp-preflight check: error: missing server command\n")
+            raise SystemExit(2)
+
+        # Accept a single quoted command string or split args.
+        if len(ns.command) == 1:
+            parts = shlex.split(ns.command[0])
+        else:
+            parts = ns.command
+        if not parts:
+            sys.stderr.write("mcp-preflight check: error: missing server command\n")
+            raise SystemExit(2)
+
+        command = parts[0]
+        args = parts[1:]
+
+        server_env, temp_home_ctx = _build_server_env(ns)
+
+        errlog: TextIO
+        errbuf: TextIO | None = None
+        if ns.quiet:
+            errlog = open(os.devnull, "w")
+        else:
+            errbuf = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+            errlog = errbuf
+
+        current: dict | None = None
+        try:
+            current = asyncio.run(
+                inspect(
+                    command,
+                    args,
+                    timeout_s=ns.timeout,
+                    errlog=errlog,
+                    env=server_env,
+                    cwd=ns.cwd,
+                    include_signals=not ns.no_signals,
+                )
+            )
+
+            server_err = _read_captured_stderr(errbuf)
+            _postprocess_success(current, server_err, verbose=ns.verbose)
+        except BaseException as e:
+            server_err = _read_captured_stderr(errbuf)
+            _, stderr_flags = stderr_notes(server_err) if server_err else ([], {})
+            _write_failure_stderr(
+                server_err, verbose=ns.verbose, has_auth_hint=stderr_flags.get("has_auth_hint", False)
+            )
+            current, error_message = _handle_inspect_failure(
+                e, server_err=server_err, command=command, args=args, timeout_s=ns.timeout
+            )
+            sys.stderr.write(error_message + "\n")
+        finally:
+            try:
+                errlog.close()
+            except Exception:
+                pass
+            try:
+                if temp_home_ctx is not None:
+                    temp_home_ctx.cleanup()
+            except Exception:
+                pass
+
+        assert isinstance(current, dict)
+        if ns.save:
+            ns.save.write_text(_report_json(current), encoding="utf-8")
+
+        baseline_digest = str(baseline_raw.get("surfaceDigest"))
+        current_obs = current.get("observation") if isinstance(current.get("observation"), dict) else {}
+        current_status = str((current_obs or {}).get("status") or "")
+        current_digest = current.get("surfaceDigest")
+        current_complete = (str(current.get("surfaceCompleteness")) == "complete") and bool(current_digest)
+
+        identity_comparable = current_complete and current_status == "ok"
+        changed = False
+        exit_code = 0
+        if identity_comparable:
+            changed = (str(current_digest) != baseline_digest)
+            exit_code = 1 if changed else 0
+        else:
+            # Non-ok statuses are inspection failures (2), while "partial" is incomparable (3).
+            if current_status == "partial":
+                exit_code = 3
+            else:
+                exit_code = 2
+
+        if ns.as_json:
+            result = {
+                "baseline": {"path": str(ns.baseline), "surfaceDigest": baseline_digest},
+                "current": {
+                    "surfaceDigest": current_digest,
+                    "surfaceCompleteness": current.get("surfaceCompleteness"),
+                    "status": (current_obs or {}).get("status"),
+                },
+                "identityComparable": identity_comparable,
+                "changed": changed if identity_comparable else None,
+                "exitCode": exit_code,
+            }
+            if identity_comparable:
+                result["changes"] = _compute_surface_changes(baseline_raw.get("surface") or {}, current.get("surface") or {})
+            else:
+                result["comparison"] = _compute_snapshot_comparison(baseline_raw, current)
+            sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        else:
+            sys.stdout.write(diff_reports(baseline_raw, current))
+
+        raise SystemExit(exit_code)
+
     parser = argparse.ArgumentParser(
         prog="mcp-preflight",
         add_help=True,

@@ -189,3 +189,97 @@ def test_cli_diff_rejects_unsupported_snapshot_version_without_traceback() -> No
         assert "Unsupported snapshotFormatVersion: 999" in combined
         assert "Traceback" not in combined
 
+
+def test_cli_check_exit_codes_and_json_output() -> None:
+    # Build a baseline snapshot by inspecting toy_open.
+    proc = subprocess.run(
+        [sys.executable, "-m", "mcp_preflight", "--json", sys.executable, str(TOY_DIR / "toy_open.py")],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    baseline_snap = json.loads(proc.stdout)
+    assert baseline_snap.get("surfaceDigest")
+
+    with tempfile.TemporaryDirectory() as td:
+        baseline = Path(td) / "baseline.json"
+        baseline.write_text(json.dumps(baseline_snap), encoding="utf-8")
+
+        # Unchanged: check against same server.
+        proc2 = subprocess.run(
+            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc2.returncode == 0
+        assert "No changes detected." in proc2.stdout
+
+        # Changed: check against a different server surface.
+        proc3 = subprocess.run(
+            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_tools_only.py")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc3.returncode == 1
+        assert "Tools:" in proc3.stdout
+
+        # Machine-readable output.
+        proc4 = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "mcp_preflight",
+                "check",
+                "--json",
+                str(baseline),
+                sys.executable,
+                str(TOY_DIR / "toy_open.py"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc4.returncode == 0
+        result = json.loads(proc4.stdout)
+        assert result["identityComparable"] is True
+        assert result["changed"] is False
+        assert result["exitCode"] == 0
+        assert isinstance(result.get("changes"), list)
+
+        # Partial/incomparable: should be 3, never 1.
+        proc5 = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "mcp_preflight",
+                "check",
+                "--timeout",
+                "1.0",
+                str(baseline),
+                sys.executable,
+                str(TOY_DIR / "toy_partial_resources.py"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc5.returncode == 3
+
+
+def test_cli_check_rejects_invalid_baseline() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        baseline = Path(td) / "baseline.json"
+        baseline.write_text(json.dumps({"snapshotFormatVersion": "999"}), encoding="utf-8")
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.returncode == 4
+        assert "Unsupported snapshotFormatVersion: 999" in (proc.stdout + proc.stderr)
+

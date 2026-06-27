@@ -99,6 +99,29 @@ Notes:
 - `mcp-preflight` exits **nonzero** when inspection is partial/failed, but it can still save a snapshot; `|| true` lets a CI job continue to run `diff`.
 - `mcp-preflight diff` currently prints a human diff and does not return “changed vs unchanged” via exit code.
 
+### CI gate: `mcp-preflight check`
+
+For pull-request gating, use `check` (a single command with stable exit codes):
+
+```bash
+# Create and commit a baseline snapshot (one-time)
+mcp-preflight --save mcp-surface.json "uv run server.py"
+git add mcp-surface.json
+
+# In CI / pull requests
+mcp-preflight check mcp-surface.json "uv run server.py"
+```
+
+Exit codes:
+
+- **0**: unchanged (complete identity comparable; `surfaceDigest` matches)
+- **1**: changed (complete identity comparable; `surfaceDigest` differs)
+- **2**: inspection failed (timeout, auth required, startup error, etc.)
+- **3**: inspection partial / identity incomparable
+- **4**: invalid baseline (missing/partial snapshot, unsupported snapshot version, invalid JSON)
+
+`check --json` prints a machine-readable result (suitable for CI bots and wrappers).
+
 ## What changes can it detect?
 
 Snapshots can reveal changes that do not alter a tool name, including:
