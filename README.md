@@ -2,9 +2,8 @@
 [![Downloads](https://static.pepy.tech/badge/mcp-preflight)](https://pepy.tech/project/mcp-preflight)
 [![PyPI version](https://img.shields.io/pypi/v/mcp-preflight.svg)](https://pypi.org/project/mcp-preflight/)
 
-`ls -la` for MCP servers. See what an MCP server exposes before you connect it.
-
-Agent systems often fail due to surprising defaults and invisible capability surfaces. `mcp-preflight` exists to make those visible before trust is established.
+`ls -la` for MCP servers. Inspect what a server declares before giving it operational access.
+`mcp-preflight` captures a server’s declared tools, schemas, resources, templates, prompts, and additional declared operations. It can save that surface as a deterministic snapshot, assign complete observations a stable SHA-256 identity, and show structural changes over time.
 
 
 
@@ -39,9 +38,9 @@ my-server (MCP 2025-03-26)
     📄 my-server://items
     📄 my-server://items/{id}
 
-  Action-level Capabilities (server-declared, 12 operations across 3 tools):
-    Not directly visible via MCP introspection.
-    These represent additional actions exposed behind the tools above.
+  Additional declared operations (from server manifest, 12 across 3 tools):
+    Not represented as separate entries in tools/list.
+    These are server-declared actions multiplexed behind the tools above.
       ↳ items (8): list, get, create, update, delete, search, export, archive
       ↳ reports (3): daily, weekly, monthly
       ↳ auth_login (single action)
@@ -64,30 +63,67 @@ mcp-preflight "uv run server.py"
 mcp-preflight "npx my-mcp-server"
 mcp-preflight "python3 /path/to/server.py"
 
-# Save a report (JSON)
-mcp-preflight --save report.json "uv run server.py"
+# Save a snapshot (JSON)
+mcp-preflight --save snapshot.json "uv run server.py"
 
-# Diff two saved reports
+# Diff two saved snapshots
 mcp-preflight diff before.json after.json
 
 # JSON output
 mcp-preflight --json "uv run server.py"
 ```
 
+## What changes can it detect?
+
+Snapshots can reveal changes that do not alter a tool name, including:
+
+- input fields added or removed
+- enum actions added behind an existing tool
+- required parameters changing
+- descriptions changing
+- resources, templates, prompts, or prompt arguments changing
+
 ## Notes
 
-- Runs the server locally in inspection mode (no tools are executed).
-- Lists exposed MCP tools, resources, and prompts.
+- Starts the server locally and performs MCP discovery without invoking the server’s declared tools.
+- Lists the declared tools, descriptions, input schemas, resources, resource templates, prompts, and prompt arguments returned by the server.
 - If a single tool supports multiple actions, publish a `{scheme}://mcp/manifest` resource so preflight can surface and diff them. See [server manifest docs](docs/server-manifest.md).
+
+## Snapshot JSON format
+
+`--json` and `--save` emit a **versioned snapshot**. Note: v0.2 replaces the previous report JSON format with this versioned snapshot format.
+
+- **`observation`**: timestamp, command, negotiated protocol version, inspection status, coverage, notes, errors, and local heuristic annotations.
+- **`surface`**: the server-declared tools, descriptions, the complete `inputSchema` returned by the server, resources, resource templates, prompts, prompt arguments, and additional declaration sources.
+
+Only `surface` is deterministically normalized and hashed.
+
+Normalization rules (high level):
+
+- Lists are sorted by identity keys (tool name, resource URI, template URI template, prompt name).
+- In JSON Schemas, `enum` and `required` arrays are treated as sets (order-insensitive).
+- In server manifests (`://mcp/manifest`), per-tool `operations` lists are treated as sets (order-insensitive).
+- Schema combinators like `oneOf` / `anyOf` / `allOf` preserve order.
+
+If all identity-bearing sections are inspected successfully, the snapshot includes `surfaceDigest` (`sha256:...`).
+
+If any identity-bearing section cannot be inspected, the snapshot is marked `surfaceCompleteness: "partial"` and no `surfaceDigest` is emitted.
+
+Tool, resource, resource-template, and prompt descriptions participate in surface identity. Preflight-generated risk labels, signals, timestamps, commands, notes, and errors do not.
+
+`protocolVersion` is preserved in `observation` but does not participate in `surfaceDigest`.
+
+The digest identifies the normalized declaration observed when all identity-bearing inspection sections completed successfully. It does not verify that the server’s declaration is truthful, exhaustive, safe, or representative of runtime behavior.
 
 <details>
 <summary>Auth-gated servers / custom env</summary>
 
-Some MCP servers only reveal tools/resources after authentication. `mcp-preflight` does not run login flows, so it may report capabilities as not enumerable until credentials are provided.
+Some MCP servers only reveal tools/resources after authentication. `mcp-preflight` does not run login flows, so it may be unable to enumerate some or all of the declared surface until credentials are provided.
 
 ```bash
 # Pass a token via env
-mcp-preflight --env MCP_SERVER_TOKEN=... "npx -y my-mcp-server"
+export MCP_SERVER_TOKEN=...
+mcp-preflight "npx -y my-mcp-server"
 
 # Point HOME (and XDG_* dirs) somewhere else (useful for servers that read ~/.config, ~/.local, etc.)
 mcp-preflight --home /tmp/mcp-preflight-home "npx -y my-mcp-server"
@@ -129,7 +165,9 @@ mcp-preflight --no-signals "uv run server.py"
 - No policy enforcement
 - No runtime analysis
 
-This tool inspects exposed MCP capabilities. It does not call tools (`call_tool`). Manifest data is read via `read_resource` — no server state is mutated.
+This tool inspects the declared interface presented by the server. It does not call tools (`call_tool`).
+
+It may read declared resources (for example, a server manifest) via `read_resource`. From the client’s perspective that is a read-oriented operation, but **servers can execute arbitrary code on any request**, including resource reads. Preflight is visibility, not a safety guarantee.
 
 ## Principles
 See [PRINCIPLES.md](PRINCIPLES.md).
@@ -137,4 +175,4 @@ See [PRINCIPLES.md](PRINCIPLES.md).
 
 ## Project
 
-- Bugs / feature requests: [GitHub Issues](`https://github.com/jordanstarrk/mcp-preflight/issues`)
+- Bugs / feature requests: [GitHub Issues](https://github.com/jordanstarrk/mcp-preflight/issues)

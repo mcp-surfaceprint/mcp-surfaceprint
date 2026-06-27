@@ -7,7 +7,7 @@ If your server exposes a **manifest resource**, mcp-preflight can surface and di
 
 ## What to do
 
-Expose a **read-only MCP resource** at:
+Expose a **read-oriented MCP resource** at:
 
 ```
 {your-scheme}://mcp/manifest
@@ -59,7 +59,7 @@ Because it’s generated from the same source as your tools:
 
 ## Design principles
 
-- **Read-only**: this is introspection, not execution
+- **Read-oriented**: this is introspection, not execution (servers may still run arbitrary code to service any request)
 - **Declared, not inferred**: the server reports what exists
 - **Lens, not a judge**: no risk scoring or policy decisions
 - **Optional**: servers without a manifest still work fine
