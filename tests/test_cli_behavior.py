@@ -283,3 +283,16 @@ def test_cli_check_rejects_invalid_baseline() -> None:
         assert proc.returncode == 4
         assert "Unsupported snapshotFormatVersion: 999" in (proc.stdout + proc.stderr)
 
+
+def test_cli_check_missing_baseline_fails_cleanly() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "mcp_preflight", "check", "does-not-exist.json", sys.executable, str(TOY_DIR / "toy_open.py")],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.returncode == 4
+    combined = proc.stdout + proc.stderr
+    assert "could not read baseline" in combined
+    assert "Traceback" not in combined
+

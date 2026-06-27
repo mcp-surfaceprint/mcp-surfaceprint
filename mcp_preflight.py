@@ -527,6 +527,14 @@ def print_text_report(snapshot: dict) -> None:
         print("  Status: ⚠️  partial\n")
         _print_introspection_coverage(snapshot)
 
+    # Surface identity: show the digest when available.
+    completeness = str(snapshot.get("surfaceCompleteness") or "partial")
+    digest = snapshot.get("surfaceDigest")
+    if digest and completeness == "complete":
+        print(f"  Surface digest: {digest}\n")
+    elif status == "partial":
+        print("  Surface digest: unavailable (partial inspection)\n")
+
     local = obs.get("localAnnotations") or {}
     print_tools(local.get("tools", []))
 
@@ -2144,6 +2152,7 @@ def diff_reports(before: dict, after: dict) -> str:
     else:
         lines.append("")
         # No digest comparison shown unless both snapshots are complete; see identityComparable below.
+    summary_insert_at = len(lines)
 
     comparison = _compute_snapshot_comparison(b, a)
     identity_comparable = bool(comparison.get("identityComparable"))
@@ -2552,6 +2561,9 @@ def diff_reports(before: dict, after: dict) -> str:
 
     # If nothing changed beyond header.
     has_change_sections = any(h in lines for h in ("  Tools:", "  Resources:", "  Prompts:", "  Capabilities (manifest-declared):"))
+    if identity_comparable and has_change_sections:
+        lines.insert(summary_insert_at, "  Surface changed.")
+        lines.insert(summary_insert_at + 1, "")
     if not has_change_sections:
         if identity_comparable:
             lines.append("  No changes detected.\n")
@@ -2813,7 +2825,13 @@ def main() -> None:
 
         # Load and validate baseline.
         try:
-            baseline_raw = json.loads(ns.baseline.read_text(encoding="utf-8"))
+            baseline_text = ns.baseline.read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(f"mcp-preflight check: error: could not read baseline ({e})\n")
+            raise SystemExit(4)
+
+        try:
+            baseline_raw = json.loads(baseline_text)
         except json.JSONDecodeError as e:
             sys.stderr.write(f"mcp-preflight check: error: invalid baseline JSON ({e})\n")
             raise SystemExit(4)
