@@ -10,7 +10,7 @@ These principles describe what the tool is for, where it stops, and how scope de
 
 - Preflight provides pre-trust visibility, not enforcement or guarantees
 - Declared surfaces are preferred over inferred behavior
-- Inspection is read-only and has no side effects
+- Preflight avoids tool execution; introspection still runs server code
 - Incomplete but honest is better than complete but misleading
 - Change visibility matters more than static completeness
 

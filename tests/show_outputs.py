@@ -51,7 +51,7 @@ SCENARIOS: list[tuple[str, str, list[str], dict[str, str]]] = [
     (
         "Partial resources (list_resources times out)",
         "toy_partial_resources.py",
-        ["--timeout", "0.8"],
+        ["--timeout", "1.2"],
         {},
     ),
     (

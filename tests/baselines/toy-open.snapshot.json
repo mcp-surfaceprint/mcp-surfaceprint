@@ -1,0 +1,218 @@
+{
+  "observation": {
+    "capabilities": {
+      "prompts": true,
+      "resources": true,
+      "tools": true
+    },
+    "command": [
+      "python",
+      "tests/toy_servers/toy_open.py"
+    ],
+    "coverage": {
+      "manifest": {
+        "attempted": false,
+        "completed": true,
+        "declaredSupported": null
+      },
+      "prompts": {
+        "attempted": true,
+        "completed": true,
+        "declaredSupported": true,
+        "itemCount": 1
+      },
+      "resourceTemplates": {
+        "attempted": true,
+        "completed": true,
+        "declaredSupported": true,
+        "itemCount": 1
+      },
+      "resources": {
+        "attempted": true,
+        "completed": true,
+        "declaredSupported": true,
+        "itemCount": 1
+      },
+      "tools": {
+        "attempted": true,
+        "completed": true,
+        "declaredSupported": true,
+        "itemCount": 5
+      }
+    },
+    "errors": [],
+    "generatedAt": "2026-06-27T12:29:52.543541+00:00",
+    "localAnnotations": {
+      "risk": {
+        "destructive": 1,
+        "read": 2,
+        "write": 2
+      },
+      "signals": [],
+      "tools": [
+        {
+          "description": "Permanently delete an item",
+          "icon": "🔴",
+          "name": "delete_item",
+          "risk": "destructive"
+        },
+        {
+          "description": "Create a new item",
+          "icon": "🟡",
+          "name": "create_item",
+          "risk": "write"
+        },
+        {
+          "description": "An oddly-named tool with no obvious verb",
+          "icon": "🟡",
+          "name": "frobnicate",
+          "risk": "write"
+        },
+        {
+          "description": "Get a single item by ID",
+          "icon": "🟢",
+          "name": "get_item",
+          "risk": "read"
+        },
+        {
+          "description": "List all items in the database",
+          "icon": "🟢",
+          "name": "list_items",
+          "risk": "read"
+        }
+      ]
+    },
+    "notes": [],
+    "protocolVersion": "2025-11-25",
+    "serverName": "toy-open",
+    "status": "ok"
+  },
+  "snapshotFormatVersion": "1",
+  "surface": {
+    "declarationSources": [],
+    "prompts": [
+      {
+        "arguments": [
+          {
+            "name": "project_name",
+            "required": true
+          }
+        ],
+        "description": "Analyze items for a project",
+        "name": "analyze_items"
+      }
+    ],
+    "resourceTemplates": [
+      {
+        "annotations": null,
+        "description": "Single item by id",
+        "mimeType": "text/plain",
+        "name": "item_by_id",
+        "title": null,
+        "uriTemplate": "toy://items/{item_id}"
+      }
+    ],
+    "resources": [
+      {
+        "annotations": null,
+        "description": "All items",
+        "mimeType": "text/plain",
+        "name": "items",
+        "title": null,
+        "uri": "toy://items"
+      }
+    ],
+    "tools": [
+      {
+        "description": "Create a new item",
+        "inputSchema": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "create_itemArguments",
+          "type": "object"
+        },
+        "name": "create_item"
+      },
+      {
+        "description": "Permanently delete an item",
+        "inputSchema": {
+          "properties": {
+            "item_id": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id"
+          ],
+          "title": "delete_itemArguments",
+          "type": "object"
+        },
+        "name": "delete_item"
+      },
+      {
+        "description": "An oddly-named tool with no obvious verb",
+        "inputSchema": {
+          "properties": {},
+          "title": "frobnicateArguments",
+          "type": "object"
+        },
+        "name": "frobnicate"
+      },
+      {
+        "description": "Get a single item by ID",
+        "inputSchema": {
+          "properties": {
+            "item_id": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id"
+          ],
+          "title": "get_itemArguments",
+          "type": "object"
+        },
+        "name": "get_item"
+      },
+      {
+        "description": "List all items in the database",
+        "inputSchema": {
+          "properties": {},
+          "title": "list_itemsArguments",
+          "type": "object"
+        },
+        "name": "list_items"
+      }
+    ]
+  },
+  "surfaceCompleteness": "complete",
+  "surfaceDigest": "sha256:de40748c7be9ddd81ebedffde343e19d396bab7656c1b2bf5053ca9969a1f251",
+  "surfaceEntityDigests": {
+    "prompts": {
+      "analyze_items": "sha256:e7bc18a10969feeb605e3d215427cc1cfbdccae7ad9ff693f6f5af9e8b606e17"
+    },
+    "resourceTemplates": {
+      "toy://items/{item_id}": "sha256:fb30ac956f1234897304f3dd090a4e30bb77ed2b13bf14a34578b50549763eb5"
+    },
+    "resources": {
+      "toy://items": "sha256:fb36bb7226afaf6b5f1ede9ac16020e4322f61c41b2a40b379fdd04b1126276b"
+    },
+    "tools": {
+      "create_item": "sha256:21dd2d01104e713eb64d3b8c86b9e42bd18b91884b58857efae47e3a16741d30",
+      "delete_item": "sha256:61553f8b622f7c5abd203b40d19592e8d18644a3201ac670ca6a9bc1ec9afedf",
+      "frobnicate": "sha256:014a1176189cc90ef273dc5b59ace7ddc87cf8d37a5c451fbdf0dad2667fb8bb",
+      "get_item": "sha256:1fe597e73e448ef4c76b109797476a931cf34c84632211990835f0dd61b54882",
+      "list_items": "sha256:92b6ffb06f034f7890b847d9059799834b0a7970b76de8349fb165b0595b804b"
+    }
+  }
+}
+

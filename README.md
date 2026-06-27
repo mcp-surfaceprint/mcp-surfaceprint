@@ -2,25 +2,132 @@
 [![Downloads](https://static.pepy.tech/badge/mcp-preflight)](https://pepy.tech/project/mcp-preflight)
 [![PyPI version](https://img.shields.io/pypi/v/mcp-preflight.svg)](https://pypi.org/project/mcp-preflight/)
 
-`ls -la` for MCP servers. See what an MCP server exposes before you connect it.
+Inspect, fingerprint, and diff an MCP server’s declared capability surface.
 
-Agent systems often fail due to surprising defaults and invisible capability surfaces. `mcp-preflight` exists to make those visible before trust is established.
+An MCP server can gain tools, parameters, resources, prompts, or new actions beneath an existing tool name. `mcp-preflight` captures that client-visible surface as a deterministic snapshot, computes a stable digest when inspection is complete, and shows structural differences over time.
 
+Use it as:
 
+- an interface compatibility check for MCP server maintainers
+- a capability-change review gate for teams consuming third-party MCP servers
 
-## Install
+If you want the deeper framing and experiments, see [You can’t prove an MCP server hasn’t changed](You%20can%E2%80%99t%20prove%20an%20MCP%20server%20hasn%E2%80%99t%20changed.md).
+
+## Why
+
+You review an MCP server before installing it. Later, a dependency upgrade adds a destructive action beneath an existing tool name. The package version changed, but nothing gives you a durable, structural record of the declared capability surface you previously reviewed.
+
+`mcp-preflight` turns that declaration into a versioned artifact that can be committed, compared, and reviewed.
+
+## Quick start (snapshot + check)
 
 ```bash
 pipx install mcp-preflight
+
+# Commit a baseline snapshot (one-time)
+mcp-preflight --save mcp-surface.json "uv run server.py"
+git add mcp-surface.json
+
+# Later, locally or in CI: check the live server against the baseline
+mcp-preflight check mcp-surface.json "uv run server.py"
 ```
 
-## Quick start
+A changed surface is not automatically unsafe; `check` turns it into an explicit review event rather than allowing it to pass unnoticed.
+
+> **Safety:** This command starts the server locally. MCP discovery does not invoke its declared tools, but a server can execute arbitrary code while handling any request. Use `--isolate-home` to prevent it from using your normal `HOME` and XDG directories; this is not a sandbox.
+
+## Example change
+
+```text
+Surface changed.
+
+Tools:
+  ~ manage_items
+      inputSchema.properties.action.enum:
+        + delete
+
+Previous: sha256:...
+Current:  sha256:...
+```
+
+Structured output:
 
 ```bash
-mcp-preflight "npx @modelcontextprotocol/server-filesystem /tmp"
+mcp-preflight check --json mcp-surface.json "uv run server.py" > check.json
 ```
 
-## Example output
+## What it captures and compares
+
+- Tools, descriptions, and full input schemas
+- Schema fields, required parameters, and enum values, including changes beneath unchanged tool names
+- Resources and resource templates
+- Prompts and prompt arguments
+- Optional per-tool manifest operations for servers that multiplex actions behind one tool (see [docs/server-manifest.md](docs/server-manifest.md))
+
+## Integrations
+
+The snapshot, surface digest, and structured `check --json` output can be consumed by registries, governance systems, agent runtimes, and security gateways. These systems can anchor approval to a specific observed surface and trigger re-review when that surface changes.
+
+`mcp-preflight` supplies the inspection artifact; the consuming system decides whether to allow, block, sandbox, or require approval.
+
+## Common workflows
+
+```bash
+# Inspect (human-readable)
+mcp-preflight "uv run server.py"
+mcp-preflight "npx my-mcp-server"
+mcp-preflight "python3 /path/to/server.py"
+
+# Save a snapshot (JSON)
+mcp-preflight --save snapshot.json "uv run server.py"
+
+# Check against a baseline snapshot
+mcp-preflight check mcp-surface.json "uv run server.py"
+
+# Diff two saved snapshots
+mcp-preflight diff before.json after.json
+
+# JSON output
+mcp-preflight --json "uv run server.py"
+```
+
+## CI workflow
+
+`check` turns declared-surface changes into an explicit review step, with stable exit codes and optional structured JSON (`--json`).
+
+1. Commit a baseline snapshot (one-time).
+2. Run `mcp-preflight check ...` in CI.
+3. If the surface changed, review the diff in the PR and intentionally update the baseline snapshot.
+
+Exit codes:
+
+- **0 — unchanged**: inspection was complete and the surface digests match
+- **1 — changed**: inspection was complete and the surface digests differ
+- **2 — inspection failed**: timeout, auth required, startup error, etc.
+- **3 — incomplete inspection**: preflight could not establish a comparable surface digest
+- **4 — invalid baseline**: missing/partial baseline, unsupported snapshot version, invalid JSON
+
+Machine-readable output:
+
+```bash
+mcp-preflight check --json mcp-surface.json "uv run server.py" > check.json
+echo "exit_code=$?"
+```
+
+## Snapshots and identity
+
+Snapshots separate observation metadata from the declared surface. Only the normalized surface is hashed.
+
+A digest is emitted only when every supported identity-bearing discovery section completes successfully. An incomplete inspection produces no digest, rather than claiming a comparable identity.
+
+See [Snapshot format and normalization](docs/snapshots.md).
+
+## Interactive inspection
+
+The interactive inspect output is useful for first-time exploration, debugging, and manual review.
+
+<details>
+<summary>Example interactive inspection output</summary>
 
 ```text
 my-server (MCP 2025-03-26)
@@ -39,55 +146,28 @@ my-server (MCP 2025-03-26)
     📄 my-server://items
     📄 my-server://items/{id}
 
-  Action-level Capabilities (server-declared, 12 operations across 3 tools):
-    Not directly visible via MCP introspection.
-    These represent additional actions exposed behind the tools above.
+  Additional declared operations (from server manifest, 12 across 3 tools):
+    Not represented as separate entries in tools/list.
+    These are server-declared actions multiplexed behind the tools above.
       ↳ items (8): list, get, create, update, delete, search, export, archive
       ↳ reports (3): daily, weekly, monthly
       ↳ auth_login (single action)
 
   Prompts:
     💬 analyze_items (project_name)
-
-  Risk summary:
-    write: 2
-    destructive: 1
-    read-only: 2
-    (best-effort heuristic from tool names/descriptions; not enforced)
 ```
 
-## Common workflows
-
-```bash
-# Run against your own server
-mcp-preflight "uv run server.py"
-mcp-preflight "npx my-mcp-server"
-mcp-preflight "python3 /path/to/server.py"
-
-# Save a report (JSON)
-mcp-preflight --save report.json "uv run server.py"
-
-# Diff two saved reports
-mcp-preflight diff before.json after.json
-
-# JSON output
-mcp-preflight --json "uv run server.py"
-```
-
-## Notes
-
-- Runs the server locally in inspection mode (no tools are executed).
-- Lists exposed MCP tools, resources, and prompts.
-- If a single tool supports multiple actions, publish a `{scheme}://mcp/manifest` resource so preflight can surface and diff them. See [server manifest docs](docs/server-manifest.md).
+</details>
 
 <details>
 <summary>Auth-gated servers / custom env</summary>
 
-Some MCP servers only reveal tools/resources after authentication. `mcp-preflight` does not run login flows, so it may report capabilities as not enumerable until credentials are provided.
+Some MCP servers only reveal tools/resources after authentication. `mcp-preflight` does not run login flows, so it may be unable to enumerate some or all of the declared surface until credentials are provided.
 
 ```bash
 # Pass a token via env
-mcp-preflight --env MCP_SERVER_TOKEN=... "npx -y my-mcp-server"
+export MCP_SERVER_TOKEN=...
+mcp-preflight "npx -y my-mcp-server"
 
 # Point HOME (and XDG_* dirs) somewhere else (useful for servers that read ~/.config, ~/.local, etc.)
 mcp-preflight --home /tmp/mcp-preflight-home "npx -y my-mcp-server"
@@ -99,23 +179,11 @@ mcp-preflight --isolate-home "npx -y my-mcp-server"
 </details>
 
 <details>
-<summary>Risk classification heuristic</summary>
+<summary>Optional heuristic annotations</summary>
 
-Based on tool names and descriptions (conservative by default):
+Interactive inspection can add heuristic signals, including read/write/destructive annotations, based on tool names and descriptions. These are hints only: they are not enforced and do not participate in the surface digest.
 
-- 🟢 **read-only**: `get`, `list`, `search`, `read`, `fetch`, `find`, `show`, `view`
-- 🟡 **write**: `create`, `add`, `update`, `set`, `send`, `write`, `upload`
-- 🔴 **destructive**: `delete`, `remove`, `destroy`, `drop`, `purge`, `clear`, `reset`
-- Unknown → 🟡 (assume write until proven otherwise)
-
-</details>
-
-<details>
-<summary>Signals (heuristic)</summary>
-
-`mcp-preflight` can emit “signals” based on text matching (best-effort). These are hints, not guarantees, and may have false positives/negatives.
-
-Disable with:
+Disable them with:
 
 ```bash
 mcp-preflight --no-signals "uv run server.py"
@@ -125,16 +193,17 @@ mcp-preflight --no-signals "uv run server.py"
 
 ## Non-goals
 
-- No sandboxing
-- No policy enforcement
-- No runtime analysis
+`mcp-preflight` does not provide sandboxing, policy enforcement, or runtime analysis. It describes the interface a server declares; it does not prove that declaration is truthful, exhaustive, or safe.
 
-This tool inspects exposed MCP capabilities. It does not call tools (`call_tool`). Manifest data is read via `read_resource` — no server state is mutated.
+## Documentation
 
-## Principles
-See [PRINCIPLES.md](PRINCIPLES.md).
+- Snapshots: see [docs/snapshots.md](docs/snapshots.md)
+- Server manifests (optional): see [docs/server-manifest.md](docs/server-manifest.md)
+- Design principles: see [PRINCIPLES.md](PRINCIPLES.md)
+- Deeper framing/experiments: see [You can’t prove an MCP server hasn’t changed](You%20can%E2%80%99t%20prove%20an%20MCP%20server%20hasn%E2%80%99t%20changed.md)
 
 
 ## Project
 
-- Bugs / feature requests: [GitHub Issues](`https://github.com/jordanstarrk/mcp-preflight/issues`)
+- Bugs / feature requests: [GitHub Issues](https://github.com/jordanstarrk/mcp-preflight/issues)
+- License: [LICENSE](LICENSE)

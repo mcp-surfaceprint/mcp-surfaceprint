@@ -5,13 +5,13 @@
 ```bash
 git clone https://github.com/jordanstarrk/mcp-preflight.git
 cd mcp-preflight
-uv sync --all-extras
+uv sync --dev
 ```
 
 ## Running tests
 
 ```bash
-uv run pytest           # quick pass/fail
+uv run pytest -q        # quick pass/fail
 uv run pytest -v        # verbose output
 uv run python tests/show_outputs.py   # visual check against toy servers
 ```
@@ -68,16 +68,15 @@ uv build
 uv publish
 ```
 
-`uv publish` reads the token from the `UV_PUBLISH_TOKEN` environment variable (set in `~/.zshrc`).
+`uv publish` reads the token from the `UV_PUBLISH_TOKEN` environment variable (set in your environment or CI secrets).
 
 ### PyPI token setup (one-time)
 
-1. Generate a token at https://pypi.org/manage/account/token/ (scoped to `mcp-preflight`)
-2. Add to your shell profile:
+1. Generate a token at `https://pypi.org/manage/account/token/` (scoped to `mcp-preflight`)
+2. Export it for the current shell session (or store it in CI secrets):
 
 ```bash
-echo 'export UV_PUBLISH_TOKEN="pypi-..."' >> ~/.zshrc
-source ~/.zshrc
+export UV_PUBLISH_TOKEN="pypi-..."
 ```
 
 ### 6. Verify

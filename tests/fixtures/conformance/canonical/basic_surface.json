@@ -1,0 +1,123 @@
+{
+  "contractVersion": "1-experimental",
+  "surface": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "action": { "enum": ["list", "get"] }
+          },
+          "required": ["id"]
+        }
+      }
+    ],
+    "resources": [
+      {
+        "uri": "toy://r",
+        "name": "R",
+        "title": null,
+        "description": "desc",
+        "mimeType": "text/plain",
+        "annotations": { "audience": ["user"] }
+      }
+    ],
+    "resourceTemplates": [
+      {
+        "uriTemplate": "toy://r/{id}",
+        "name": null,
+        "title": null,
+        "description": "tpl",
+        "mimeType": null,
+        "annotations": null
+      }
+    ],
+    "prompts": [
+      {
+        "name": "p",
+        "description": "pd",
+        "arguments": [
+          { "name": "b", "description": "bd", "required": false, "schema": { "type": "string" } },
+          { "name": "a", "description": "ad", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    ],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "task", "description": "Task tool", "operations": ["list", "get", "create"] },
+            { "tool": "auth_login", "description": "Login" }
+          ]
+        }
+      }
+    ]
+  },
+  "expectedCanonical": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": { "enum": ["get", "list"] },
+            "id": { "type": "string" }
+          },
+          "required": ["id"]
+        }
+      }
+    ],
+    "resources": [
+      {
+        "uri": "toy://r",
+        "name": "R",
+        "title": null,
+        "description": "desc",
+        "mimeType": "text/plain",
+        "annotations": { "audience": ["user"] }
+      }
+    ],
+    "resourceTemplates": [
+      {
+        "uriTemplate": "toy://r/{id}",
+        "name": null,
+        "title": null,
+        "description": "tpl",
+        "mimeType": null,
+        "annotations": null
+      }
+    ],
+    "prompts": [
+      {
+        "name": "p",
+        "description": "pd",
+        "arguments": [
+          { "name": "a", "description": "ad", "required": true, "schema": { "type": "string" } },
+          { "name": "b", "description": "bd", "required": false, "schema": { "type": "string" } }
+        ]
+      }
+    ],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "auth_login", "description": "Login" },
+            { "tool": "task", "description": "Task tool", "operations": ["create", "get", "list"] }
+          ]
+        }
+      }
+    ]
+  },
+  "expectedDigest": "sha256:b30928339e89dede2776f5c9b3c3189147594342a70e87fae3950d2c2c62d4b6"
+}
+

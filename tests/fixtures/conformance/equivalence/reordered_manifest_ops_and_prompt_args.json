@@ -1,0 +1,86 @@
+{
+  "contractVersion": "1-experimental",
+  "a": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "action": { "enum": ["list", "get"] }
+          },
+          "required": ["id"]
+        }
+      }
+    ],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [
+      {
+        "name": "p",
+        "description": "pd",
+        "arguments": [
+          { "name": "b", "description": "bd", "required": false, "schema": { "type": "string" } },
+          { "name": "a", "description": "ad", "required": true, "schema": { "type": "string" } }
+        ]
+      }
+    ],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "task", "description": "Task tool", "operations": ["list", "get", "create"] },
+            { "tool": "auth_login", "description": "Login" }
+          ]
+        }
+      }
+    ]
+  },
+  "b": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "required": ["id"],
+          "properties": {
+            "action": { "enum": ["get", "list"] },
+            "id": { "type": "string" }
+          },
+          "type": "object"
+        }
+      }
+    ],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [
+      {
+        "name": "p",
+        "description": "pd",
+        "arguments": [
+          { "name": "a", "description": "ad", "required": true, "schema": { "type": "string" } },
+          { "name": "b", "description": "bd", "required": false, "schema": { "type": "string" } }
+        ]
+      }
+    ],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "auth_login", "description": "Login" },
+            { "tool": "task", "description": "Task tool", "operations": ["create", "list", "get"] }
+          ]
+        }
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,48 @@
+{
+  "contractVersion": "1-experimental",
+  "before": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": { "enum": ["get", "list"] }
+          }
+        }
+      }
+    ],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": []
+  },
+  "after": {
+    "tools": [
+      {
+        "name": "t",
+        "description": "d",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": { "enum": ["get", "list", "delete"] }
+          }
+        }
+      }
+    ],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": []
+  },
+  "expectedRecords": [
+    {
+      "type": "value_changed",
+      "entityType": "tool",
+      "entityId": "t",
+      "path": "/inputSchema"
+    }
+  ]
+}
+

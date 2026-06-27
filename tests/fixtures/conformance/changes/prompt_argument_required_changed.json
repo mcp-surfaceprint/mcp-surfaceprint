@@ -1,0 +1,44 @@
+{
+  "contractVersion": "1-experimental",
+  "before": {
+    "tools": [],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [
+      {
+        "name": "analyze",
+        "description": null,
+        "arguments": [
+          { "name": "project", "required": false }
+        ]
+      }
+    ],
+    "declarationSources": []
+  },
+  "after": {
+    "tools": [],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [
+      {
+        "name": "analyze",
+        "description": null,
+        "arguments": [
+          { "name": "project", "required": true }
+        ]
+      }
+    ],
+    "declarationSources": []
+  },
+  "expectedRecords": [
+    {
+      "type": "value_changed",
+      "entityType": "prompt",
+      "entityId": "analyze",
+      "path": "/arguments/project/required",
+      "before": false,
+      "after": true
+    }
+  ]
+}
+
