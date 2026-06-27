@@ -1,0 +1,32 @@
+{
+  "contractVersion": "1-experimental",
+  "before": {
+    "tools": [],
+    "resources": [
+      { "uri": "toy://r", "description": "desc" }
+    ],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": []
+  },
+  "after": {
+    "tools": [],
+    "resources": [
+      { "uri": "toy://r", "description": "desc2" }
+    ],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": []
+  },
+  "expectedRecords": [
+    {
+      "type": "value_changed",
+      "entityType": "resource",
+      "entityId": "toy://r",
+      "path": "/description",
+      "before": "desc",
+      "after": "desc2"
+    }
+  ]
+}
+

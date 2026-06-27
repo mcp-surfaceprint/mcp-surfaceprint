@@ -1,0 +1,49 @@
+{
+  "contractVersion": "1-experimental",
+  "before": {
+    "tools": [],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "task", "operations": ["get", "list"] }
+          ]
+        }
+      }
+    ]
+  },
+  "after": {
+    "tools": [],
+    "resources": [],
+    "resourceTemplates": [],
+    "prompts": [],
+    "declarationSources": [
+      {
+        "sourceType": "resource",
+        "name": "mcp_manifest",
+        "uri": "toy://mcp/manifest",
+        "extracted": {
+          "toolCapabilities": [
+            { "tool": "task", "operations": ["get", "list", "delete"] }
+          ]
+        }
+      }
+    ]
+  },
+  "expectedRecords": [
+    {
+      "type": "value_added",
+      "entityType": "manifest_tool",
+      "entityId": "task",
+      "path": "/operations",
+      "value": "delete"
+    }
+  ]
+}
+
