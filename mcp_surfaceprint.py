@@ -23,12 +23,16 @@ import sys
 import tempfile
 import textwrap
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version as _dist_version
 from pathlib import Path
 from typing import Any, TextIO
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-__version__ = "0.4.0"
+try:
+    __version__ = _dist_version("mcp-surfaceprint")
+except PackageNotFoundError:  # pragma: no cover
+    __version__ = "0.0.0+dev"
 
 # Exception groups are built-in in Python 3.11+, but on 3.10 they're provided by the
 # `exceptiongroup` backport (often installed as a transitive dependency).
