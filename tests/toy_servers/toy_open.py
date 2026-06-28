@@ -1,5 +1,5 @@
 """
-Toy MCP server (stdio) used for mcp-preflight integration tests.
+Toy MCP server (stdio) used for mcp-surfaceprint integration tests.
 
 This server always exposes a mix of tools/resources/prompts so the preflight
 can validate enumeration and risk classification deterministically.
@@ -12,7 +12,7 @@ import anyio
 from mcp.server.fastmcp import FastMCP
 
 
-mcp = FastMCP(name="toy-open", instructions="Toy server for mcp-preflight tests.")
+mcp = FastMCP(name="toy-open", instructions="Toy server for mcp-surfaceprint tests.")
 
 
 @mcp.tool(description="List all items in the database")

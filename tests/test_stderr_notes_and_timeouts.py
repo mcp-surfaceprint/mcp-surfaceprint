@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mcp_preflight import contains_timeout, stderr_notes
+from mcp_surfaceprint import contains_timeout, stderr_notes
 
 
 def test_stderr_notes_auth_hint_detection() -> None:

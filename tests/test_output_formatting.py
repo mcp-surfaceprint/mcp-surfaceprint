@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_preflight import (
+from mcp_surfaceprint import (
     _mark_partial,
     _print_introspection_coverage,
     print_notes,

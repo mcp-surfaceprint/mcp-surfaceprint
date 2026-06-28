@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-preflight"
-version = "0.4.0"
+name = "mcp-surfaceprint"
+version = "0.5.0"
 description = "See what an MCP server exposes before you trust or connect it."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,13 +41,13 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jordanstarrk/mcp-preflight"
-Repository = "https://github.com/jordanstarrk/mcp-preflight"
-Issues = "https://github.com/jordanstarrk/mcp-preflight/issues"
-Changelog = "https://github.com/jordanstarrk/mcp-preflight/releases"
+Homepage = "https://github.com/mcp-surfaceprint/mcp-surfaceprint"
+Repository = "https://github.com/mcp-surfaceprint/mcp-surfaceprint"
+Issues = "https://github.com/mcp-surfaceprint/mcp-surfaceprint/issues"
+Changelog = "https://github.com/mcp-surfaceprint/mcp-surfaceprint/releases"
 
 [project.scripts]
-mcp-preflight = "mcp_preflight:main"
+mcp-surfaceprint = "mcp_surfaceprint:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -55,4 +55,4 @@ testpaths = ["tests"]
 addopts = "--tb=short -q"
 
 [tool.setuptools]
-py-modules = ["mcp_preflight"]
+py-modules = ["mcp_surfaceprint"]

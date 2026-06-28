@@ -16,7 +16,7 @@ def test_cli_save_writes_json_report() -> None:
             [
                 sys.executable,
                 "-m",
-                "mcp_preflight",
+                "mcp_surfaceprint",
                 "--json",
                 "--save",
                 str(out),
@@ -39,7 +39,7 @@ def test_cli_no_signals_disables_signal_output_in_json() -> None:
         [
             sys.executable,
             "-m",
-            "mcp_preflight",
+            "mcp_surfaceprint",
             "--json",
             "--no-signals",
             sys.executable,
@@ -56,7 +56,7 @@ def test_cli_no_signals_disables_signal_output_in_json() -> None:
 
 def test_cli_env_requires_key_value() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--env", "NOT_KEY_VALUE", sys.executable, str(TOY_DIR / "toy_open.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--env", "NOT_KEY_VALUE", sys.executable, str(TOY_DIR / "toy_open.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -112,7 +112,7 @@ def test_cli_diff_subcommand_prints_diff() -> None:
         a.write_text(json.dumps(after), encoding="utf-8")
 
         proc = subprocess.run(
-            [sys.executable, "-m", "mcp_preflight", "diff", str(b), str(a)],
+            [sys.executable, "-m", "mcp_surfaceprint", "diff", str(b), str(a)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -124,13 +124,13 @@ def test_cli_diff_subcommand_prints_diff() -> None:
 
 def test_cli_version_flag_prints_version() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--version"],
+        [sys.executable, "-m", "mcp_surfaceprint", "--version"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=True,
     )
-    assert proc.stdout.strip().startswith("mcp-preflight ")
+    assert proc.stdout.strip().startswith("mcp-surfaceprint ")
 
 
 def test_cli_diff_rejects_unsupported_snapshot_version_without_traceback() -> None:
@@ -179,7 +179,7 @@ def test_cli_diff_rejects_unsupported_snapshot_version_without_traceback() -> No
         a.write_text(json.dumps(after), encoding="utf-8")
 
         proc = subprocess.run(
-            [sys.executable, "-m", "mcp_preflight", "diff", str(b), str(a)],
+            [sys.executable, "-m", "mcp_surfaceprint", "diff", str(b), str(a)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -193,7 +193,7 @@ def test_cli_diff_rejects_unsupported_snapshot_version_without_traceback() -> No
 def test_cli_check_exit_codes_and_json_output() -> None:
     # Build a baseline snapshot by inspecting toy_open.
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--json", sys.executable, str(TOY_DIR / "toy_open.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--json", sys.executable, str(TOY_DIR / "toy_open.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -208,7 +208,7 @@ def test_cli_check_exit_codes_and_json_output() -> None:
 
         # Unchanged: check against same server.
         proc2 = subprocess.run(
-            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
+            [sys.executable, "-m", "mcp_surfaceprint", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -218,7 +218,7 @@ def test_cli_check_exit_codes_and_json_output() -> None:
 
         # Changed: check against a different server surface.
         proc3 = subprocess.run(
-            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_tools_only.py")],
+            [sys.executable, "-m", "mcp_surfaceprint", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_tools_only.py")],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -231,7 +231,7 @@ def test_cli_check_exit_codes_and_json_output() -> None:
             [
                 sys.executable,
                 "-m",
-                "mcp_preflight",
+                "mcp_surfaceprint",
                 "check",
                 "--json",
                 str(baseline),
@@ -254,7 +254,7 @@ def test_cli_check_exit_codes_and_json_output() -> None:
             [
                 sys.executable,
                 "-m",
-                "mcp_preflight",
+                "mcp_surfaceprint",
                 "check",
                 "--timeout",
                 "1.0",
@@ -275,7 +275,7 @@ def test_cli_check_rejects_invalid_baseline() -> None:
         baseline.write_text(json.dumps({"snapshotFormatVersion": "999"}), encoding="utf-8")
 
         proc = subprocess.run(
-            [sys.executable, "-m", "mcp_preflight", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
+            [sys.executable, "-m", "mcp_surfaceprint", "check", str(baseline), sys.executable, str(TOY_DIR / "toy_open.py")],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -286,7 +286,7 @@ def test_cli_check_rejects_invalid_baseline() -> None:
 
 def test_cli_check_missing_baseline_fails_cleanly() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "check", "does-not-exist.json", sys.executable, str(TOY_DIR / "toy_open.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "check", "does-not-exist.json", sys.executable, str(TOY_DIR / "toy_open.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

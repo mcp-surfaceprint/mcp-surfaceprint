@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that changes exposed tools based on HOME.
 
-Used to test mcp-preflight's --home and --isolate-home wiring.
+Used to test mcp-surfaceprint's --home and --isolate-home wiring.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def noop() -> str:
     return "ok"
 
 
-if HOME.startswith("mcp-preflight-home-"):
+if HOME.startswith("mcp-surfaceprint-home-"):
 
     @mcp.tool(description="Present when --isolate-home is used")
     def home_isolated_flag() -> bool:

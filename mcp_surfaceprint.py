@@ -1,12 +1,12 @@
 """
-mcp-preflight — See what an MCP server does before you trust it.
+mcp-surfaceprint — See what an MCP server does before you trust it.
 
 Usage:
-  mcp-preflight "uv run server.py"
-  mcp-preflight "npx my-mcp-server"
-  mcp-preflight "python /path/to/server.py"
-  mcp-preflight --save report.json "uv run server.py"
-  mcp-preflight diff before.json after.json
+  mcp-surfaceprint "uv run server.py"
+  mcp-surfaceprint "npx my-mcp-server"
+  mcp-surfaceprint "python /path/to/server.py"
+  mcp-surfaceprint --save report.json "uv run server.py"
+  mcp-surfaceprint diff before.json after.json
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Any, TextIO
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # Exception groups are built-in in Python 3.11+, but on 3.10 they're provided by the
 # `exceptiongroup` backport (often installed as a transitive dependency).
@@ -2588,13 +2588,13 @@ def _build_server_env(ns: argparse.Namespace) -> tuple[dict[str, str], tempfile.
     server_env = dict(os.environ)
     for item in ns.env or []:
         if "=" not in item:
-            raise SystemExit(f"mcp-preflight: --env must be KEY=VALUE (got {item!r})")
+            raise SystemExit(f"mcp-surfaceprint: --env must be KEY=VALUE (got {item!r})")
         k, v = item.split("=", 1)
         server_env[k] = v
 
     temp_home_ctx: tempfile.TemporaryDirectory[str] | None = None
     if ns.isolate_home:
-        temp_home_ctx = tempfile.TemporaryDirectory(prefix="mcp-preflight-home-")
+        temp_home_ctx = tempfile.TemporaryDirectory(prefix="mcp-surfaceprint-home-")
         home_dir: Path | None = Path(temp_home_ctx.name)
     elif ns.home:
         home_dir = ns.home
@@ -2727,16 +2727,16 @@ def _handle_inspect_failure(
 
     # Build a concise user-facing error message.
     if is_timeout:
-        error_message = f"mcp-preflight: timed out after {timeout_s}s"
+        error_message = f"mcp-surfaceprint: timed out after {timeout_s}s"
     elif stderr_flags.get("has_auth_hint"):
         error_message = (
-            "mcp-preflight: 🔒 authentication required (the MCP server did not start without credentials)\n"
+            "mcp-surfaceprint: 🔒 authentication required (the MCP server did not start without credentials)\n"
             "Hint: re-run with --verbose to see server stderr, or pass credentials via --env/--home."
         )
     elif stack_note:
-        error_message = "mcp-preflight: server crashed during startup (see stderr above)"
+        error_message = "mcp-surfaceprint: server crashed during startup (see stderr above)"
     else:
-        error_message = f"mcp-preflight: error: {_normalize_text(str(exc))}"
+        error_message = f"mcp-surfaceprint: error: {_normalize_text(str(exc))}"
 
     return snapshot, error_message
 
@@ -2766,14 +2766,14 @@ def _emit_report(report: dict, *, save_path: Path | None, as_json: bool) -> None
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print('Usage: mcp-preflight "uv run server.py"')
-        print('  mcp-preflight "npx my-mcp-server"')
-        print('  mcp-preflight "python /path/to/server.py"')
-        print("  mcp-preflight diff before.json after.json")
+        print('Usage: mcp-surfaceprint "uv run server.py"')
+        print('  mcp-surfaceprint "npx my-mcp-server"')
+        print('  mcp-surfaceprint "python /path/to/server.py"')
+        print("  mcp-surfaceprint diff before.json after.json")
         sys.exit(1)
 
     if sys.argv[1] == "diff":
-        parser = argparse.ArgumentParser(prog="mcp-preflight diff", add_help=True)
+        parser = argparse.ArgumentParser(prog="mcp-surfaceprint diff", add_help=True)
         parser.add_argument("before", type=Path)
         parser.add_argument("after", type=Path)
         ns = parser.parse_args(sys.argv[2:])
@@ -2782,19 +2782,19 @@ def main() -> None:
             before = json.loads(ns.before.read_text(encoding="utf-8"))
             after = json.loads(ns.after.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            sys.stderr.write(f"mcp-preflight diff: error: invalid JSON ({e})\n")
+            sys.stderr.write(f"mcp-surfaceprint diff: error: invalid JSON ({e})\n")
             raise SystemExit(2)
 
         try:
             sys.stdout.write(diff_reports(before, after))
         except ValueError as e:
             # User-facing failures (unsupported snapshot format/version, etc.) should not print a traceback.
-            sys.stderr.write(f"mcp-preflight diff: error: {e}\n")
+            sys.stderr.write(f"mcp-surfaceprint diff: error: {e}\n")
             raise SystemExit(2)
         return
 
     if sys.argv[1] == "check":
-        parser = argparse.ArgumentParser(prog="mcp-preflight check", add_help=True)
+        parser = argparse.ArgumentParser(prog="mcp-surfaceprint check", add_help=True)
         parser.add_argument("--json", action="store_true", dest="as_json", help="Print the check result as JSON")
         parser.add_argument("--save", type=Path, help="Save the live snapshot (current) to a file")
         parser.add_argument("--timeout", type=float, default=10.0, help="Timeout (seconds) for MCP calls (default: 10)")
@@ -2827,28 +2827,28 @@ def main() -> None:
         try:
             baseline_text = ns.baseline.read_text(encoding="utf-8")
         except OSError as e:
-            sys.stderr.write(f"mcp-preflight check: error: could not read baseline ({e})\n")
+            sys.stderr.write(f"mcp-surfaceprint check: error: could not read baseline ({e})\n")
             raise SystemExit(4)
 
         try:
             baseline_raw = json.loads(baseline_text)
         except json.JSONDecodeError as e:
-            sys.stderr.write(f"mcp-preflight check: error: invalid baseline JSON ({e})\n")
+            sys.stderr.write(f"mcp-surfaceprint check: error: invalid baseline JSON ({e})\n")
             raise SystemExit(4)
 
         if not (isinstance(baseline_raw, dict) and baseline_raw.get("snapshotFormatVersion")):
-            sys.stderr.write("mcp-preflight check: error: baseline must be a versioned snapshot (legacy reports are not supported)\n")
+            sys.stderr.write("mcp-surfaceprint check: error: baseline must be a versioned snapshot (legacy reports are not supported)\n")
             raise SystemExit(4)
         ver = str(baseline_raw.get("snapshotFormatVersion"))
         if ver != "1":
-            sys.stderr.write(f"mcp-preflight check: error: Unsupported snapshotFormatVersion: {ver}\n")
+            sys.stderr.write(f"mcp-surfaceprint check: error: Unsupported snapshotFormatVersion: {ver}\n")
             raise SystemExit(4)
         if str(baseline_raw.get("surfaceCompleteness")) != "complete" or not baseline_raw.get("surfaceDigest"):
-            sys.stderr.write("mcp-preflight check: error: baseline must be a complete snapshot with surfaceDigest\n")
+            sys.stderr.write("mcp-surfaceprint check: error: baseline must be a complete snapshot with surfaceDigest\n")
             raise SystemExit(4)
 
         if not ns.command:
-            sys.stderr.write("mcp-preflight check: error: missing server command\n")
+            sys.stderr.write("mcp-surfaceprint check: error: missing server command\n")
             raise SystemExit(2)
 
         # Accept a single quoted command string or split args.
@@ -2857,7 +2857,7 @@ def main() -> None:
         else:
             parts = ns.command
         if not parts:
-            sys.stderr.write("mcp-preflight check: error: missing server command\n")
+            sys.stderr.write("mcp-surfaceprint check: error: missing server command\n")
             raise SystemExit(2)
 
         command = parts[0]
@@ -2956,7 +2956,7 @@ def main() -> None:
         raise SystemExit(exit_code)
 
     parser = argparse.ArgumentParser(
-        prog="mcp-preflight",
+        prog="mcp-surfaceprint",
         add_help=True,
         description="Inspect, fingerprint, and diff an MCP server’s exposed capabilities.",
         epilog=(
@@ -2964,7 +2964,7 @@ def main() -> None:
             "Preflight does not invoke declared tools."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"mcp-preflight {__version__}")
+    parser.add_argument("--version", action="version", version=f"mcp-surfaceprint {__version__}")
     parser.add_argument("--json", action="store_true", dest="as_json", help="Print the versioned snapshot as JSON")
     parser.add_argument("--save", type=Path, help="Save the versioned snapshot to a file")
     parser.add_argument("--timeout", type=float, default=10.0, help="Timeout (seconds) for MCP calls (default: 10)")
@@ -2993,7 +2993,7 @@ def main() -> None:
     ns = parser.parse_args(sys.argv[1:])
 
     if not ns.command:
-        print('Usage: mcp-preflight "uv run server.py"')
+        print('Usage: mcp-surfaceprint "uv run server.py"')
         sys.exit(1)
 
     # Accept a single quoted command string (e.g. "uv run server.py") or split args (e.g. uv run server.py).
@@ -3003,7 +3003,7 @@ def main() -> None:
         parts = ns.command
 
     if not parts:
-        print('Usage: mcp-preflight "uv run server.py"')
+        print('Usage: mcp-surfaceprint "uv run server.py"')
         sys.exit(1)
 
     command = parts[0]

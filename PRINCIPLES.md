@@ -1,6 +1,6 @@
-# mcp-preflight — Principles
+# mcp-surfaceprint — Principles
 
-`mcp-preflight` provides **pre-trust visibility** into MCP servers.
+`mcp-surfaceprint` provides **pre-trust visibility** into MCP servers.
 
 It is a small inspection tool, not a safety system, policy engine, or governance layer.  
 These principles describe what the tool is for, where it stops, and how scope decisions are made.
@@ -26,7 +26,7 @@ These principles describe what the tool is for, where it stops, and how scope de
 
 ## Hard Boundaries (Non-Goals)
 
-`mcp-preflight` does **not** aim to be:
+`mcp-surfaceprint` does **not** aim to be:
 
 - A security scanner or vulnerability detector
 - A sandbox, VM, or execution environment
@@ -125,7 +125,7 @@ Before adding a feature, ask:
 
 > **Does this help someone see or track capabilities without executing code or deciding what should happen?**
 
-If not, it probably does not belong in `mcp-preflight`.
+If not, it probably does not belong in `mcp-surfaceprint`.
 
 ---
 

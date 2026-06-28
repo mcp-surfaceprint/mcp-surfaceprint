@@ -2,7 +2,7 @@
 Toy MCP server (stdio) that only exposes tools — no resources or prompts.
 
 Uses the low-level Server API (not FastMCP) so that capabilities.resources
-and capabilities.prompts are genuinely None.  This lets mcp-preflight test
+and capabilities.prompts are genuinely None.  This lets mcp-surfaceprint test
 the "not supported by server" display path.
 """
 

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from conftest import TOY_DIR, parse_preflight_json
-from mcp_preflight import (
+from mcp_surfaceprint import (
     _expand_tool_capabilities,
     _parse_capabilities_resource,
     print_tool_capabilities,
@@ -310,7 +310,7 @@ def test_toy_capabilities_total_operation_count() -> None:
 
 def test_toy_capabilities_text_output_shows_scale() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", sys.executable, str(TOY_DIR / "toy_capabilities.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", sys.executable, str(TOY_DIR / "toy_capabilities.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

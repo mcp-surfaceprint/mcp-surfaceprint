@@ -3,8 +3,8 @@
 ## Development setup
 
 ```bash
-git clone https://github.com/jordanstarrk/mcp-preflight.git
-cd mcp-preflight
+git clone https://github.com/mcp-surfaceprint/mcp-surfaceprint.git
+cd mcp-surfaceprint
 uv sync --dev
 ```
 
@@ -53,7 +53,7 @@ git push origin vX.Y.Z
 
 ### 4. Create a GitHub Release
 
-Go to [Releases](https://github.com/jordanstarrk/mcp-preflight/releases) → **Draft a new release** → select the `vX.Y.Z` tag → write user-facing release notes (see below).
+Go to [Releases](https://github.com/mcp-surfaceprint/mcp-surfaceprint/releases) → **Draft a new release** → select the `vX.Y.Z` tag → write user-facing release notes (see below).
 
 **Release notes** should be user-facing (not commit-level detail):
 - Group by feature, not by file
@@ -72,7 +72,7 @@ uv publish
 
 ### PyPI token setup (one-time)
 
-1. Generate a token at `https://pypi.org/manage/account/token/` (scoped to `mcp-preflight`)
+1. Generate a token at `https://pypi.org/manage/account/token/` (scoped to `mcp-surfaceprint`)
 2. Export it for the current shell session (or store it in CI secrets):
 
 ```bash
@@ -82,8 +82,8 @@ export UV_PUBLISH_TOKEN="pypi-..."
 ### 6. Verify
 
 ```bash
-pip install --upgrade mcp-preflight
-mcp-preflight --help
+pip install --upgrade mcp-surfaceprint
+mcp-surfaceprint --help
 ```
 
-Check that https://pypi.org/project/mcp-preflight/ shows the new version.
+Check that https://pypi.org/project/mcp-surfaceprint/ shows the new version.

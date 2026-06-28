@@ -1,5 +1,5 @@
 """
-Toy MCP server (stdio) that is "auth-gated" for mcp-preflight integration tests.
+Toy MCP server (stdio) that is "auth-gated" for mcp-surfaceprint integration tests.
 
 Behavior:
 - If TOY_TOKEN != "ok": emits an auth hint on stderr and exposes *no* capabilities.
@@ -23,7 +23,7 @@ def _build_server() -> FastMCP:
     token = os.environ.get("TOY_TOKEN")
 
     if token != "ok":
-        # mcp-preflight infers auth gating from stderr hints + empty enumerations.
+        # mcp-surfaceprint infers auth gating from stderr hints + empty enumerations.
         sys.stderr.write("Authentication required: no auth token/credentials provided.\n")
         sys.stderr.flush()
         return FastMCP(name="toy-auth-gated", instructions="Toy auth-gated server for tests.")

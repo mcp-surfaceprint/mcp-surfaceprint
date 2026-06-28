@@ -139,7 +139,7 @@ def test_toy_tools_only_enumerates_tools() -> None:
 def test_toy_tools_only_text_output_shows_not_supported() -> None:
     """Text mode should say 'not supported by server' for resources/prompts."""
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", sys.executable, str(TOY_DIR / "toy_tools_only.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", sys.executable, str(TOY_DIR / "toy_tools_only.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -161,7 +161,7 @@ def test_prompts_unsupported_is_complete_and_visible() -> None:
     assert "surfaceDigest" in snap
 
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", sys.executable, str(TOY_DIR / "toy_tools_only.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", sys.executable, str(TOY_DIR / "toy_tools_only.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -187,7 +187,7 @@ def test_prompts_timeout_is_partial_and_unknown() -> None:
         [
             sys.executable,
             "-m",
-            "mcp_preflight",
+            "mcp_surfaceprint",
             "--timeout",
             "1.2",
             sys.executable,

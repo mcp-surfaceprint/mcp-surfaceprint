@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that intentionally times out on list_resources.
 
-Used to deterministically test mcp-preflight's "partial" status behavior:
+Used to deterministically test mcp-surfaceprint's "partial" status behavior:
 - list_tools succeeds quickly
 - list_resources sleeps longer than the client's timeout
 """

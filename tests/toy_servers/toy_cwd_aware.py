@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that changes exposed tools based on cwd.
 
-Used to test mcp-preflight's --cwd behavior.
+Used to test mcp-surfaceprint's --cwd behavior.
 """
 
 from __future__ import annotations

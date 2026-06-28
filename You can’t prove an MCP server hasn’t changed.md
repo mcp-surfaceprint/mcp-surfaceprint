@@ -2,7 +2,7 @@ Date: Feb 26, 2026
 
 ## Why this doc exists
 
-This document exists to help me map the MCP inspection space and clarify where [mcp-preflight](https://github.com/jordanstarrk/mcp-preflight) should (and should not) evolve.
+This document exists to help me map the MCP inspection space and clarify where [mcp-surfaceprint](https://github.com/mcp-surfaceprint/mcp-surfaceprint) should (and should not) evolve.
 
 MCP makes it easy to connect agents to tools, but it does not provide a durable way to reason about how a server’s declared capabilities change over time. While exploring this, I ran a set of small, controlled experiments to understand what the protocol exposes today, what declaration frameworks improve, and what remains missing.
 

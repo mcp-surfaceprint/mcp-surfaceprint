@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that intentionally times out on list_prompts.
 
-Used to deterministically test mcp-preflight's distinction between:
+Used to deterministically test mcp-surfaceprint's distinction between:
 - prompts unsupported (toy_tools_only.py) -> complete surface + digest
 - prompts supported but list_prompts fails -> partial surface + no digest
 """

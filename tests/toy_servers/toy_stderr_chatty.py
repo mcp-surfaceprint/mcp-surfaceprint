@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that emits stderr output immediately.
 
-Used to test mcp-preflight's --quiet / --verbose stderr handling.
+Used to test mcp-surfaceprint's --quiet / --verbose stderr handling.
 """
 
 from __future__ import annotations

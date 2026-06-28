@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_preflight import _build_snapshot, _compute_surface_digest, diff_reports
+from mcp_surfaceprint import _build_snapshot, _compute_surface_digest, diff_reports
 
 
 def _complete_coverage() -> dict:

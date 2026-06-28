@@ -10,9 +10,9 @@ TOY_DIR = ROOT / "tests" / "toy_servers"
 
 
 def run_preflight_json(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run mcp-preflight with --json flag and return the CompletedProcess."""
+    """Run mcp-surfaceprint with --json flag and return the CompletedProcess."""
     return subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--json", *args],
+        [sys.executable, "-m", "mcp_surfaceprint", "--json", *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -21,7 +21,7 @@ def run_preflight_json(args: list[str], *, check: bool = True) -> subprocess.Com
 
 
 def parse_preflight_json(args: list[str]) -> dict:
-    """Run mcp-preflight with --json, parse stdout, and return the snapshot dict."""
+    """Run mcp-surfaceprint with --json, parse stdout, and return the snapshot dict."""
     # Preflight may intentionally exit nonzero while still emitting a snapshot (e.g. partial surface).
     proc = run_preflight_json(args, check=False)
     return json.loads(proc.stdout)

@@ -1,7 +1,7 @@
 """
 Toy MCP server (stdio) that changes exposed tools based on environment variables.
 
-Used to test mcp-preflight's --env behavior (repeatable/override).
+Used to test mcp-surfaceprint's --env behavior (repeatable/override).
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mcp_preflight import _canonicalize_surface, _compute_surface_digest, _compute_surface_changes
+from mcp_surfaceprint import _canonicalize_surface, _compute_surface_digest, _compute_surface_changes
 
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "conformance"

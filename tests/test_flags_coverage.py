@@ -11,7 +11,7 @@ from conftest import TOY_DIR, run_preflight_json
 
 def test_flag_json_default_text_mode_without_json() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", sys.executable, str(TOY_DIR / "toy_open.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", sys.executable, str(TOY_DIR / "toy_open.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -41,7 +41,7 @@ def test_flag_timeout_triggers_timeout_status_for_non_mcp_process() -> None:
 
 def test_auth_hint_on_startup_failure_prints_clean_auth_required_message() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--json", sys.executable, str(TOY_DIR / "toy_auth_crash.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--json", sys.executable, str(TOY_DIR / "toy_auth_crash.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -60,7 +60,7 @@ def test_auth_hint_startup_failure_verbose_includes_full_stderr() -> None:
         [
             sys.executable,
             "-m",
-            "mcp_preflight",
+            "mcp_surfaceprint",
             "--verbose",
             "--json",
             sys.executable,
@@ -106,19 +106,19 @@ def test_flag_env_repeatable_and_overrides_previous_value() -> None:
 
 def test_flag_verbose_prints_server_stderr_block() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--verbose", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--verbose", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=True,
     )
-    # mcp-preflight adds a labeled block when --verbose is on.
+    # mcp-surfaceprint adds a labeled block when --verbose is on.
     assert "[server stderr]" in proc.stderr
 
 
 def test_flag_default_does_not_print_server_stderr_on_success() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -129,7 +129,7 @@ def test_flag_default_does_not_print_server_stderr_on_success() -> None:
 
 def test_flag_quiet_suppresses_server_stderr_capture_and_output() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight", "--quiet", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
+        [sys.executable, "-m", "mcp_surfaceprint", "--quiet", "--json", sys.executable, str(TOY_DIR / "toy_stderr_chatty.py")],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -143,7 +143,7 @@ def test_flags_quiet_and_verbose_are_mutually_exclusive() -> None:
         [
             sys.executable,
             "-m",
-            "mcp_preflight",
+            "mcp_surfaceprint",
             "--quiet",
             "--verbose",
             "--json",
@@ -160,7 +160,7 @@ def test_flags_quiet_and_verbose_are_mutually_exclusive() -> None:
 
 def test_no_command_prints_usage_and_exits_nonzero() -> None:
     proc = subprocess.run(
-        [sys.executable, "-m", "mcp_preflight"],
+        [sys.executable, "-m", "mcp_surfaceprint"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

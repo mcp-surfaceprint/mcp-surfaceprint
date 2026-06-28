@@ -23,7 +23,7 @@ jobs:
         run: uv sync --dev
 
       - name: Smoke: CLI entrypoint
-        run: uv run mcp-preflight --help
+        run: uv run mcp-surfaceprint --help
 
       - name: Run tests
         run: uv run pytest -q
@@ -32,7 +32,7 @@ jobs:
         run: |
           # This intentionally fails when the toy server's declared MCP surface
           # changes without an accompanying baseline update.
-          uv run mcp-preflight check \
+          uv run mcp-surfaceprint check \
             tests/baselines/toy-open.snapshot.json \
             "python tests/toy_servers/toy_open.py"
 

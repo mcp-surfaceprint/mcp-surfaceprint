@@ -1,6 +1,6 @@
 # Snapshot format and normalization
 
-`mcp-preflight` emits a **versioned snapshot JSON** via `--json` and `--save`.
+`mcp-surfaceprint` emits a **versioned snapshot JSON** via `--json` and `--save`.
 
 At a high level:
 
@@ -32,7 +32,7 @@ Preflight-generated heuristic annotations, timestamps, commands, notes, and erro
 
 ## Legacy JSON inputs
 
-`mcp-preflight diff` accepts older, unversioned legacy report JSON. Legacy reports are treated as **partial**:
+`mcp-surfaceprint diff` accepts older, unversioned legacy report JSON. Legacy reports are treated as **partial**:
 
 - Missing legacy evidence is not rendered as a proven capability change.
 - Digest-based identity comparison is only available when both inputs are complete snapshots.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_preflight import classify_tool, collect_signals
+from mcp_surfaceprint import classify_tool, collect_signals
 
 
 def test_classify_tool_priority_destructive_over_write_and_read() -> None:

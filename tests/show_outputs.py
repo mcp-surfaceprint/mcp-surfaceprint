@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run mcp-preflight against each toy server and display the results.
+Run mcp-surfaceprint against each toy server and display the results.
 
 Usage:
   uv run python tests/show_outputs.py          # text output (default)
@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOY_DIR = ROOT / "tests" / "toy_servers"
 
-# Each entry: (label, server script, extra mcp-preflight args, extra env)
+# Each entry: (label, server script, extra mcp-surfaceprint args, extra env)
 SCENARIOS: list[tuple[str, str, list[str], dict[str, str]]] = [
     (
         "Open server (tools + resources + prompts)",
@@ -134,7 +134,7 @@ def main() -> None:
     for label, script, args, env in SCENARIOS:
         server_path = str(TOY_DIR / script)
         cmd = [
-            sys.executable, "-m", "mcp_preflight",
+            sys.executable, "-m", "mcp_surfaceprint",
             *extra_flags,
             *args,
             sys.executable, server_path,
@@ -142,7 +142,7 @@ def main() -> None:
 
         print(f"\n{separator}")
         print(f"  {label}")
-        print(f"  cmd: mcp-preflight {' '.join(extra_flags + args)} python {script}")
+        print(f"  cmd: mcp-surfaceprint {' '.join(extra_flags + args)} python {script}")
         print(separator)
 
         result = subprocess.run(
@@ -297,7 +297,7 @@ DIFF_SCENARIOS: list[tuple[str, dict, dict]] = [
 
 
 def _run_diff_scenarios(separator: str) -> None:
-    from mcp_preflight import diff_reports
+    from mcp_surfaceprint import diff_reports
 
     print(f"\n{separator}")
     print("  Diff report scenarios")
@@ -306,7 +306,7 @@ def _run_diff_scenarios(separator: str) -> None:
     for label, before, after in DIFF_SCENARIOS:
         print(f"\n{separator}")
         print(f"  {label}")
-        print(f"  cmd: mcp-preflight diff before.json after.json")
+        print(f"  cmd: mcp-surfaceprint diff before.json after.json")
         print(separator)
         print(diff_reports(before, after))
 

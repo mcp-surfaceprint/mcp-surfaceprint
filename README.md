@@ -1,10 +1,10 @@
-# mcp-preflight
-[![Downloads](https://static.pepy.tech/badge/mcp-preflight)](https://pepy.tech/project/mcp-preflight)
-[![PyPI version](https://img.shields.io/pypi/v/mcp-preflight.svg)](https://pypi.org/project/mcp-preflight/)
+# mcp-surfaceprint
+[![Downloads](https://static.pepy.tech/badge/mcp-surfaceprint)](https://pepy.tech/project/mcp-surfaceprint)
+[![PyPI version](https://img.shields.io/pypi/v/mcp-surfaceprint.svg)](https://pypi.org/project/mcp-surfaceprint/)
 
 Inspect, fingerprint, and diff an MCP server’s declared capability surface.
 
-An MCP server can gain tools, parameters, resources, prompts, or new actions beneath an existing tool name. `mcp-preflight` captures that client-visible surface as a deterministic snapshot, computes a stable digest when inspection is complete, and shows structural differences over time.
+An MCP server can gain tools, parameters, resources, prompts, or new actions beneath an existing tool name. `mcp-surfaceprint` captures that client-visible surface as a deterministic snapshot, computes a stable digest when inspection is complete, and shows structural differences over time.
 
 Use it as:
 
@@ -17,19 +17,19 @@ If you want the deeper framing and experiments, see [You can’t prove an MCP se
 
 You review an MCP server before installing it. Later, a dependency upgrade adds a destructive action beneath an existing tool name. The package version changed, but nothing gives you a durable, structural record of the declared capability surface you previously reviewed.
 
-`mcp-preflight` turns that declaration into a versioned artifact that can be committed, compared, and reviewed.
+`mcp-surfaceprint` turns that declaration into a versioned artifact that can be committed, compared, and reviewed.
 
 ## Quick start (snapshot + check)
 
 ```bash
-pipx install mcp-preflight
+pipx install mcp-surfaceprint
 
 # Commit a baseline snapshot (one-time)
-mcp-preflight --save mcp-surface.json "uv run server.py"
+mcp-surfaceprint --save mcp-surface.json "uv run server.py"
 git add mcp-surface.json
 
 # Later, locally or in CI: check the live server against the baseline
-mcp-preflight check mcp-surface.json "uv run server.py"
+mcp-surfaceprint check mcp-surface.json "uv run server.py"
 ```
 
 A changed surface is not automatically unsafe; `check` turns it into an explicit review event rather than allowing it to pass unnoticed.
@@ -53,7 +53,7 @@ Current:  sha256:...
 Structured output:
 
 ```bash
-mcp-preflight check --json mcp-surface.json "uv run server.py" > check.json
+mcp-surfaceprint check --json mcp-surface.json "uv run server.py" > check.json
 ```
 
 ## What it captures and compares
@@ -68,27 +68,27 @@ mcp-preflight check --json mcp-surface.json "uv run server.py" > check.json
 
 The snapshot, surface digest, and structured `check --json` output can be consumed by registries, governance systems, agent runtimes, and security gateways. These systems can anchor approval to a specific observed surface and trigger re-review when that surface changes.
 
-`mcp-preflight` supplies the inspection artifact; the consuming system decides whether to allow, block, sandbox, or require approval.
+`mcp-surfaceprint` supplies the inspection artifact; the consuming system decides whether to allow, block, sandbox, or require approval.
 
 ## Common workflows
 
 ```bash
 # Inspect (human-readable)
-mcp-preflight "uv run server.py"
-mcp-preflight "npx my-mcp-server"
-mcp-preflight "python3 /path/to/server.py"
+mcp-surfaceprint "uv run server.py"
+mcp-surfaceprint "npx my-mcp-server"
+mcp-surfaceprint "python3 /path/to/server.py"
 
 # Save a snapshot (JSON)
-mcp-preflight --save snapshot.json "uv run server.py"
+mcp-surfaceprint --save snapshot.json "uv run server.py"
 
 # Check against a baseline snapshot
-mcp-preflight check mcp-surface.json "uv run server.py"
+mcp-surfaceprint check mcp-surface.json "uv run server.py"
 
 # Diff two saved snapshots
-mcp-preflight diff before.json after.json
+mcp-surfaceprint diff before.json after.json
 
 # JSON output
-mcp-preflight --json "uv run server.py"
+mcp-surfaceprint --json "uv run server.py"
 ```
 
 ## CI workflow
@@ -96,7 +96,7 @@ mcp-preflight --json "uv run server.py"
 `check` turns declared-surface changes into an explicit review step, with stable exit codes and optional structured JSON (`--json`).
 
 1. Commit a baseline snapshot (one-time).
-2. Run `mcp-preflight check ...` in CI.
+2. Run `mcp-surfaceprint check ...` in CI.
 3. If the surface changed, review the diff in the PR and intentionally update the baseline snapshot.
 
 Exit codes:
@@ -110,7 +110,7 @@ Exit codes:
 Machine-readable output:
 
 ```bash
-mcp-preflight check --json mcp-surface.json "uv run server.py" > check.json
+mcp-surfaceprint check --json mcp-surface.json "uv run server.py" > check.json
 echo "exit_code=$?"
 ```
 
@@ -162,18 +162,18 @@ my-server (MCP 2025-03-26)
 <details>
 <summary>Auth-gated servers / custom env</summary>
 
-Some MCP servers only reveal tools/resources after authentication. `mcp-preflight` does not run login flows, so it may be unable to enumerate some or all of the declared surface until credentials are provided.
+Some MCP servers only reveal tools/resources after authentication. `mcp-surfaceprint` does not run login flows, so it may be unable to enumerate some or all of the declared surface until credentials are provided.
 
 ```bash
 # Pass a token via env
 export MCP_SERVER_TOKEN=...
-mcp-preflight "npx -y my-mcp-server"
+mcp-surfaceprint "npx -y my-mcp-server"
 
 # Point HOME (and XDG_* dirs) somewhere else (useful for servers that read ~/.config, ~/.local, etc.)
-mcp-preflight --home /tmp/mcp-preflight-home "npx -y my-mcp-server"
+mcp-surfaceprint --home /tmp/mcp-surfaceprint-home "npx -y my-mcp-server"
 
 # Isolate HOME entirely to reduce side effects/pollution
-mcp-preflight --isolate-home "npx -y my-mcp-server"
+mcp-surfaceprint --isolate-home "npx -y my-mcp-server"
 ```
 
 </details>
@@ -186,14 +186,14 @@ Interactive inspection can add heuristic signals, including read/write/destructi
 Disable them with:
 
 ```bash
-mcp-preflight --no-signals "uv run server.py"
+mcp-surfaceprint --no-signals "uv run server.py"
 ```
 
 </details>
 
 ## Non-goals
 
-`mcp-preflight` does not provide sandboxing, policy enforcement, or runtime analysis. It describes the interface a server declares; it does not prove that declaration is truthful, exhaustive, or safe.
+`mcp-surfaceprint` does not provide sandboxing, policy enforcement, or runtime analysis. It describes the interface a server declares; it does not prove that declaration is truthful, exhaustive, or safe.
 
 ## Documentation
 
@@ -205,5 +205,5 @@ mcp-preflight --no-signals "uv run server.py"
 
 ## Project
 
-- Bugs / feature requests: [GitHub Issues](https://github.com/jordanstarrk/mcp-preflight/issues)
+- Bugs / feature requests: [GitHub Issues](https://github.com/mcp-surfaceprint/mcp-surfaceprint/issues)
 - License: [LICENSE](LICENSE)

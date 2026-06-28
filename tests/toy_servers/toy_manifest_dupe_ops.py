@@ -2,7 +2,7 @@
 Toy MCP server exposing a malformed ://mcp/manifest resource.
 
 Specifically: the manifest declares duplicate operation values for a dispatched tool.
-This should cause mcp-preflight to mark manifest inspection incomplete, mark the
+This should cause mcp-surfaceprint to mark manifest inspection incomplete, mark the
 surface partial, and suppress surfaceDigest emission.
 """
 

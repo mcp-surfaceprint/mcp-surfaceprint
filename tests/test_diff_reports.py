@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp_preflight import _compute_snapshot_comparison, diff_reports
+from mcp_surfaceprint import _compute_snapshot_comparison, diff_reports
 
 
 def _snapshot(

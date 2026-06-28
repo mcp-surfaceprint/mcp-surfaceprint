@@ -1,9 +1,9 @@
-# Exposing a Server Manifest (for mcp-preflight)
+# Exposing a Server Manifest (for mcp-surfaceprint)
 
 Some MCP servers route many operations through a single tool (for example, an `invoice` tool that handles `list`, `get`, `create`, `send`, `mark_paid`).
 To MCP introspection, this still looks like *one tool*.
 
-If your server exposes a **manifest resource**, mcp-preflight can surface and diff those hidden operations.
+If your server exposes a **manifest resource**, mcp-surfaceprint can surface and diff those hidden operations.
 
 ## What to do
 
@@ -17,7 +17,7 @@ Examples:
 - `acme://mcp/manifest`
 - `myserver://mcp/manifest`
 
-mcp-preflight will automatically read this resource if present.
+mcp-surfaceprint will automatically read this resource if present.
 
 ## What it should return
 
@@ -66,7 +66,7 @@ Because it’s generated from the same source as your tools:
 
 ## What this enables
 
-With a manifest, mcp-preflight can make capability changes explicit:
+With a manifest, mcp-surfaceprint can make capability changes explicit:
 
 - `invoice`: 5 → 8 operations (added: `send`, `mark_paid`)
 - `task`: added operation `assign`
